@@ -1,0 +1,2722 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Biblioteca Virtual | FCAPyF - UMSS</title>
+
+  <!-- ===== PWA ===== -->
+  <meta name="theme-color" content="#1a3a1a"/>
+  <meta name="mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="Biblioteca FCAPyF"/>
+  <meta name="description" content="Biblioteca Virtual de la FCAPyF – UMSS. Material académico por carrera y semestre."/>
+  <link rel="apple-touch-icon" href="logo.png"/>
+  <link rel="manifest" href="manifest.json"/>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js', { scope: './' })
+          .then(() => console.log('SW listo'))
+          .catch(e => console.warn('SW error:', e));
+      });
+    }
+  </script>
+
+  <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;600;700&family=Raleway:wght@300;400;600&display=swap" rel="stylesheet">
+  <!-- Firebase via REST API - sin SDK, funciona en cualquier navegador -->
+  <script>
+    const FB_PROJECT = 'biblioteca-fcapyf-30511';
+    const FB_API_KEY = 'AIzaSyBnGvdwKeDoMGhM0QSnyzs68FMeb77Xdbw';
+    const FB_BASE = 'https://firestore.googleapis.com/v1/projects/' + FB_PROJECT + '/databases/(default)/documents/progreso/';
+
+    // Convierte objeto JS plano a formato Firestore REST
+    function toFirestore(obj) {
+      const fields = {};
+      for (const k in obj) {
+        const v = obj[k];
+        if (Array.isArray(v)) {
+          fields[k] = { arrayValue: { values: v.map(x => ({ integerValue: String(x) })) } };
+        } else if (typeof v === 'object' && v !== null) {
+          fields[k] = { mapValue: { fields: toFirestoreFields(v) } };
+        }
+      }
+      return { fields };
+    }
+
+    function toFirestoreFields(obj) {
+      const fields = {};
+      for (const k in obj) {
+        const v = obj[k];
+        if (Array.isArray(v)) {
+          fields[k] = { arrayValue: { values: v.map(x => ({ integerValue: String(x) })) } };
+        } else if (typeof v === 'object' && v !== null) {
+          fields[k] = { mapValue: { fields: toFirestoreFields(v) } };
+        }
+      }
+      return fields;
+    }
+
+    // Convierte respuesta Firestore REST a objeto JS plano
+    function fromFirestore(doc) {
+      if (!doc || !doc.fields) return null;
+      const result = {};
+      for (const k in doc.fields) {
+        const v = doc.fields[k];
+        if (v.mapValue) {
+          result[k] = fromFirestoreFields(v.mapValue.fields || {});
+        } else if (v.arrayValue) {
+          result[k] = (v.arrayValue.values || []).map(x => parseInt(x.integerValue));
+        }
+      }
+      return result;
+    }
+
+    function fromFirestoreFields(fields) {
+      const result = {};
+      for (const k in fields) {
+        const v = fields[k];
+        if (v.mapValue) {
+          result[k] = fromFirestoreFields(v.mapValue.fields || {});
+        } else if (v.arrayValue) {
+          result[k] = (v.arrayValue.values || []).map(x => parseInt(x.integerValue));
+        }
+      }
+      return result;
+    }
+
+    window._fbCargar = async function(pin) {
+      try {
+        const res = await fetch(FB_BASE + pin + '?key=' + FB_API_KEY);
+        if (res.status === 404) return null;
+        const json = await res.json();
+        if (json.error) return null;
+        const fields = json.fields || {};
+        const data = { vencidas: {}, carrera: null, valoraciones: {} };
+        // Leer carrera
+        if (fields.carrera && fields.carrera.stringValue) {
+          data.carrera = fields.carrera.stringValue;
+        }
+        // Leer vencidas
+        if (fields.vencidas && fields.vencidas.mapValue) {
+          const vf = fields.vencidas.mapValue.fields || {};
+          for (const k in vf) {
+            data.vencidas[k] = (vf[k].arrayValue?.values || []).map(x => parseInt(x.integerValue));
+          }
+        }
+        if (fields.valoraciones && fields.valoraciones.mapValue) {
+          const vf = fields.valoraciones.mapValue.fields || {};
+          for (const k in vf) {
+            if (vf[k].stringValue !== undefined) data.valoraciones[k] = vf[k].stringValue;
+          }
+        }
+        return data;
+      } catch(e) { console.error('FB cargar:', e); return null; }
+    };
+
+    window._fbGuardar = async function(pin, data) {
+      try {
+        const vFields = {};
+        for (const carrera in (data.vencidas || {})) {
+          const arr = data.vencidas[carrera];
+          vFields[carrera] = { arrayValue: { values: arr.map(x => ({ integerValue: String(x) })) } };
+        }
+        const fields = {
+          vencidas: { mapValue: { fields: vFields } }
+        };
+        if (data.carrera) {
+          fields.carrera = { stringValue: data.carrera };
+        }
+        const valFields = {};
+        for (const k in (data.valoraciones || {})) {
+          valFields[k] = { stringValue: String(data.valoraciones[k]) };
+        }
+        fields.valoraciones = { mapValue: { fields: valFields } };
+        await fetch(FB_BASE + pin + '?key=' + FB_API_KEY, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fields })
+        });
+      } catch(e) { console.error('FB guardar:', e); }
+    };
+
+    window._firebaseReady = true;
+    document.dispatchEvent(new Event('firebase-ready'));
+  </script>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    html, body { min-height:100vh; font-family:'Raleway',sans-serif; background:#0a0a0a; }
+
+    /* ===== SPLASH SCREEN PWA ===== */
+    #pwa-splash {
+      position:fixed; inset:0; z-index:9999;
+      background-image: url('fondopwa.jpg');
+      background-size:cover; background-position:center;
+      display:flex; flex-direction:column;
+      align-items:center; justify-content:center;
+      transition:opacity 0.7s ease;
+    }
+    #pwa-splash::before {
+      content:''; position:absolute; inset:0;
+      background:rgba(10,30,10,0.52);
+    }
+    #pwa-splash .splash-logo {
+      position:relative; z-index:1;
+      width:50px; height:50px; border-radius:50%;
+      border:3px solid rgba(255,255,255,0.3);
+      background:rgba(255,255,255,0.08); padding:8px;
+      object-fit:contain;
+      filter:drop-shadow(0 4px 30px rgba(0,0,0,0.7));
+      animation:splashPop 0.7s cubic-bezier(.26,1.5,.46,.97) both;
+    }
+    #pwa-splash .splash-nombre {
+      position:relative; z-index:1;
+      font-family:'Oswald',sans-serif; font-size:1.5rem; font-weight:700;
+      color:#fff; letter-spacing:0.06em;
+      text-shadow:0 2px 20px rgba(0,0,0,0.9);
+      margin-top:1rem; text-align:center;
+      animation:splashFade 0.6s 0.2s ease both;
+    }
+    #pwa-splash .splash-nombre span { color:#7bc67e; }
+    #pwa-splash .splash-sub {
+      position:relative; z-index:1;
+      font-size:0.78rem; color:rgba(255,255,255,0.6);
+      letter-spacing:0.12em; text-transform:uppercase;
+      margin-top:0.4rem;
+      animation:splashFade 0.6s 0.35s ease both;
+    }
+    @keyframes splashPop {
+      from { transform:scale(0.6); opacity:0; }
+      to   { transform:scale(1);   opacity:1; }
+    }
+    @keyframes splashFade {
+      from { transform:translateY(10px); opacity:0; }
+      to   { transform:translateY(0);    opacity:1; }
+    }
+    #pwa-splash.ocultar { opacity:0; pointer-events:none; }
+
+    /* ===== FONDO ===== */
+    .fondo {
+      position:fixed; inset:0; z-index:0;
+      background-image: url('fondo.jpg');
+      background-size:cover; background-position:center;
+      transition: background-image 0.5s;
+    }
+    .fondo::after {
+      content:''; position:absolute; inset:0;
+      background: rgba(8,18,8,0.83);
+    }
+    .wrap { position:relative; z-index:1; min-height:100vh; }
+
+    /* ===== PANTALLAS ===== */
+    .screen { display:none; padding:2.5rem 1.5rem 4rem; min-height:100vh; position:relative; z-index:2; }
+    .screen.active { display:flex; flex-direction:column; align-items:center; }
+
+    /* ===== PANTALLA INICIO ===== */
+    #inicio { justify-content:center; }
+    .logo-wrap { margin-bottom:1.2rem; animation:popIn 0.6s cubic-bezier(.26,1.5,.46,.97) both; }
+    .logo-wrap img { width:130px; height:130px; object-fit:contain; border-radius:50%; border:3px solid rgba(255,255,255,0.15); background:rgba(255,255,255,0.05); padding:6px; filter:drop-shadow(0 4px 24px rgba(0,0,0,0.6)); }
+    .tit-bib { font-family:'Oswald',sans-serif; font-size:clamp(0.85rem,2vw,1rem); letter-spacing:0.35em; color:rgba(255,255,255,0.55); text-transform:uppercase; margin-bottom:0.3rem; animation:fadeUp 0.5s 0.15s ease both; }
+    .tit-fac { font-family:'Oswald',sans-serif; font-size:clamp(1.6rem,5vw,2.6rem); font-weight:700; color:#fff; letter-spacing:0.06em; text-align:center; text-shadow:0 2px 20px rgba(0,0,0,0.8); animation:fadeUp 0.5s 0.2s ease both; }
+    .tit-fac span { color:#7bc67e; }
+    .subtitulo { font-size:0.88rem; color:rgba(255,255,255,0.45); font-style:italic; letter-spacing:0.08em; margin:1rem 0 2.4rem; text-align:center; animation:fadeUp 0.5s 0.3s ease both; }
+    .carreras-grid { display:grid; grid-template-columns:1fr 1fr; gap:1rem; width:100%; max-width:560px; animation:fadeUp 0.6s 0.4s ease both; }
+    .carrera-btn { position:relative; border-radius:16px; padding:1.4rem 1.2rem 1.2rem; cursor:pointer; text-decoration:none; display:flex; flex-direction:column; justify-content:space-between; min-height:110px; overflow:hidden; transition:transform 0.2s,box-shadow 0.2s; border:1px solid rgba(255,255,255,0.08); }
+    .carrera-btn:hover { transform:translateY(-4px) scale(1.02); box-shadow:0 12px 40px rgba(0,0,0,0.5); }
+    .carrera-btn .icon { position:absolute; top:1rem; right:1rem; font-size:1.8rem; opacity:0.85; }
+    .carrera-btn .label { font-family:'Oswald',sans-serif; font-size:0.68rem; letter-spacing:0.15em; text-transform:uppercase; color:rgba(255,255,255,0.6); margin-bottom:0.3rem; }
+    .carrera-btn .nombre { font-family:'Oswald',sans-serif; font-size:1.15rem; font-weight:600; color:#fff; line-height:1.2; text-shadow:0 1px 8px rgba(0,0,0,0.4); }
+    .c1 { background:linear-gradient(135deg,#c0392b,#e74c3c); }
+    .c2 { background:linear-gradient(135deg,#2471a3,#3498db); }
+    .c3 { background:linear-gradient(135deg,#7d3c98,#9b59b6); }
+    .c4 { background:linear-gradient(135deg,#1e8449,#27ae60); }
+    .c5 { background:linear-gradient(135deg,#d35400,#e67e22); }
+    .carrera-btn.full { grid-column:1/-1; min-height:90px; flex-direction:row; align-items:center; padding:1.2rem 1.6rem; }
+    .carrera-btn.full .icon { position:static; margin-right:1rem; font-size:2rem; }
+    .footer-txt { margin-top:2.4rem; font-size:0.75rem; color:rgba(255,255,255,0.25); letter-spacing:0.06em; text-align:center; }
+
+    /* ===== PANTALLA CARRERA ===== */
+    #carrera { align-items:flex-start; max-width:1000px; margin:0 auto; width:100%; }
+    .btn-back {
+      display:inline-flex; align-items:center; gap:0.6rem;
+      background:rgba(255,255,255,0.12); border:1.5px solid rgba(255,255,255,0.25);
+      color:#fff; padding:0.75rem 1.4rem; border-radius:10px;
+      font-size:1rem; font-weight:600; cursor:pointer;
+      transition:background 0.15s, transform 0.1s;
+      margin-bottom:2rem; font-family:'Raleway',sans-serif;
+      position:relative; z-index:10;
+      min-height:48px; min-width:120px;
+      -webkit-tap-highlight-color: rgba(255,255,255,0.2);
+      user-select:none;
+    }
+    .btn-back:hover { background:rgba(255,255,255,0.22); }
+    .btn-back:active { transform:scale(0.96); background:rgba(255,255,255,0.3); }
+    .carrera-titulo { font-family:'Oswald',sans-serif; font-size:clamp(2rem,5vw,3rem); font-weight:700; margin-bottom:0.4rem; text-shadow:0 2px 20px rgba(0,0,0,0.6); }
+    .carrera-sub { color:rgba(255,255,255,0.45); font-size:0.9rem; margin-bottom:3rem; }
+    .semestres-grid { display:grid; gap:1rem; width:100%; }
+    .sem-card { background:rgba(20,20,20,0.78); border-radius:14px; padding:1.8rem 1rem; text-align:center; cursor:pointer; transition:transform 0.2s,box-shadow 0.2s,background 0.2s; display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:120px; backdrop-filter:blur(8px); border:1px solid rgba(255,255,255,0.08); }
+    .sem-card:hover { transform:translateY(-5px); background:rgba(30,30,30,0.92); }
+    .sem-num { font-family:'Oswald',sans-serif; font-size:2.8rem; font-weight:700; line-height:1; }
+    .sem-label { font-size:0.72rem; color:rgba(255,255,255,0.45); text-transform:uppercase; letter-spacing:0.1em; margin-top:0.4rem; }
+
+    /* ===== PANTALLA SEMESTRE ===== */
+    #semestre { align-items:flex-start; max-width:800px; margin:0 auto; width:100%; }
+    .sem-titulo { font-family:'Oswald',sans-serif; font-size:1.6rem; font-weight:700; color:#fff; margin-bottom:0.3rem; }
+    .sem-carrera-nombre { color:rgba(255,255,255,0.45); font-size:0.88rem; margin-bottom:2rem; }
+    .materias-lista { width:100%; display:flex; flex-direction:column; gap:0.7rem; }
+    .materia-item { background:rgba(20,20,20,0.78); border-radius:12px; padding:1rem 1.2rem; display:flex; align-items:center; justify-content:space-between; gap:1rem; backdrop-filter:blur(8px); border:1px solid rgba(255,255,255,0.07); flex-wrap:wrap; }
+    .mat-num-badge { min-width:34px; height:34px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:0.78rem; font-weight:700; color:#fff; flex-shrink:0; }
+    .mat-nombre { flex:1; color:#fff; font-size:0.95rem; font-weight:600; }
+    .mat-btns { display:flex; gap:0.4rem; flex-wrap:wrap; }
+    .btn-mat { font-size:0.74rem; padding:0.28rem 0.85rem; border-radius:100px; text-decoration:none; border:1.5px solid; font-weight:500; transition:background 0.15s,color 0.15s; cursor:pointer; background:transparent; font-family:'Raleway',sans-serif; }
+    .btn-apunte { color:#7bc67e; border-color:#7bc67e; }
+    .btn-apunte:hover { background:#7bc67e; color:#000; }
+    .btn-practica { color:#f0a500; border-color:#f0a500; }
+    .btn-practica:hover { background:#f0a500; color:#000; }
+    .btn-examen { color:#ce93d8; border-color:#ce93d8; }
+    .btn-examen:hover { background:#ce93d8; color:#000; }
+    .pronto { color:rgba(255,255,255,0.25); font-size:0.8rem; font-style:italic; }
+
+    /* ===== ANIMACIONES ===== */
+    @keyframes popIn { from{opacity:0;transform:scale(0.7)} to{opacity:1;transform:scale(1)} }
+    @keyframes fadeUp { from{opacity:0;transform:translateY(20px)} to{opacity:1;transform:translateY(0)} }
+
+    @media(max-width:600px) { .semestres-grid { grid-template-columns:repeat(3,1fr) !important; } }
+
+    /* ===== BARRA SUPERIOR DE USUARIO ===== */
+    .topbar {
+      position:fixed; top:0; left:0; right:0; z-index:100;
+      display:flex; align-items:center; justify-content:flex-end;
+      padding:0.7rem 1.4rem; gap:0.7rem;
+      background:linear-gradient(to bottom, rgba(0,0,0,0.65) 0%, transparent 100%);
+    }
+    .user-chip {
+      display:flex; align-items:center; gap:0.5rem;
+      background:rgba(20,20,20,0.88); border:1px solid rgba(255,255,255,0.15);
+      border-radius:100px; padding:0.4rem 1rem 0.4rem 0.6rem;
+      font-size:0.8rem; color:rgba(255,255,255,0.88); backdrop-filter:blur(10px);
+      cursor:pointer; transition:background 0.2s; user-select:none;
+    }
+    .user-chip:hover { background:rgba(50,50,50,0.98); }
+    .user-chip .avatar {
+      width:26px; height:26px; border-radius:50%;
+      background:linear-gradient(135deg,#7bc67e,#2e7d32);
+      display:flex; align-items:center; justify-content:center;
+      font-size:0.7rem; font-weight:700; color:#fff; flex-shrink:0;
+    }
+    .btn-login-top {
+      background:rgba(123,198,126,0.18); border:1px solid rgba(123,198,126,0.45);
+      color:#7bc67e; padding:0.4rem 1rem; border-radius:100px;
+      font-size:0.8rem; cursor:pointer; transition:background 0.2s;
+      font-family:'Raleway',sans-serif; font-weight:600;
+    }
+    .btn-login-top:hover { background:rgba(123,198,126,0.32); }
+
+    /* ===== MODAL BASE ===== */
+    .modal-overlay {
+      position:fixed; inset:0; z-index:200;
+      background:rgba(0,0,0,0.75); display:flex; align-items:center; justify-content:center;
+      padding:1rem; backdrop-filter:blur(6px);
+      opacity:0; pointer-events:none; transition:opacity 0.25s;
+    }
+    .modal-overlay.open { opacity:1; pointer-events:all; }
+    .modal-box {
+      background:#0f0f0f; border:1px solid rgba(255,255,255,0.1);
+      border-radius:22px; padding:2rem 1.8rem; width:100%; max-width:360px;
+      transform:translateY(24px) scale(0.97); transition:transform 0.28s cubic-bezier(.26,1.4,.46,.97);
+    }
+    .modal-overlay.open .modal-box { transform:translateY(0) scale(1); }
+    .modal-box h2 { font-family:'Oswald',sans-serif; font-size:1.5rem; color:#fff; margin-bottom:0.3rem; }
+    .modal-box .modal-sub { font-size:0.82rem; color:rgba(255,255,255,0.4); margin-bottom:1.6rem; line-height:1.5; }
+    .modal-btn-primary {
+      width:100%; padding:0.8rem; border-radius:12px; border:none; cursor:pointer;
+      font-family:'Oswald',sans-serif; font-size:1rem; font-weight:600; letter-spacing:0.06em;
+      background:linear-gradient(135deg,#1b5e20,#7bc67e); color:#fff;
+      transition:opacity 0.2s,transform 0.1s; margin-top:0.5rem;
+    }
+    .modal-btn-primary:hover { opacity:0.88; }
+    .modal-btn-primary:active { transform:scale(0.98); }
+    .modal-btn-secondary {
+      width:100%; padding:0.6rem; border-radius:12px; border:1px solid rgba(255,255,255,0.1);
+      cursor:pointer; font-family:'Raleway',sans-serif; font-size:0.82rem;
+      background:transparent; color:rgba(255,255,255,0.38); margin-top:0.5rem;
+      transition:color 0.2s, border-color 0.2s;
+    }
+    .modal-btn-secondary:hover { color:rgba(255,255,255,0.7); border-color:rgba(255,255,255,0.25); }
+    .modal-error { color:#ef5350; font-size:0.78rem; margin-bottom:0.5rem; min-height:1.1em; text-align:center; }
+
+    /* ===== CAJAS SIS (9 dígitos) ===== */
+    .pin-boxes { display:flex; gap:0.35rem; justify-content:center; margin-bottom:1.2rem; flex-wrap:nowrap; }
+    .pin-box {
+      width:32px; height:44px; border-radius:10px;
+      background:rgba(255,255,255,0.06); border:2px solid rgba(255,255,255,0.12);
+      color:#fff; font-family:'Oswald',sans-serif; font-size:1.25rem; font-weight:700;
+      text-align:center; outline:none; caret-color:transparent;
+      transition:border-color 0.2s, background 0.2s; flex-shrink:0;
+    }
+    .pin-box:focus { border-color:#7bc67e; background:rgba(123,198,126,0.08); }
+    .pin-box.filled { border-color:rgba(123,198,126,0.5); }
+    /* separador visual entre año y número de orden */
+    .pin-sep { width:8px; height:2px; background:rgba(255,255,255,0.2); border-radius:2px; align-self:center; flex-shrink:0; }
+    .pin-label { font-size:0.75rem; color:rgba(255,255,255,0.4); text-align:center; margin-bottom:1rem; letter-spacing:0.05em; }
+
+    /* ===== PROGRESO EN MATERIAS ===== */
+    .mat-vencida { background:rgba(46,125,50,0.18) !important; border-color:rgba(123,198,126,0.35) !important; }
+    .mat-vencida .mat-nombre { color:#a5d6a7; }
+    .btn-vencer {
+      font-size:0.72rem; padding:0.28rem 0.75rem; border-radius:100px;
+      border:1.5px solid rgba(255,255,255,0.18); color:rgba(255,255,255,0.35);
+      background:transparent; cursor:pointer; font-family:'Raleway',sans-serif;
+      transition:all 0.2s; white-space:nowrap;
+    }
+    .btn-vencer:hover { border-color:rgba(123,198,126,0.5); color:#7bc67e; }
+    .btn-vencer.vencida { background:rgba(46,125,50,0.3); border-color:#7bc67e; color:#7bc67e; }
+    .check-vencida { font-size:1.1rem; margin-right:0.2rem; }
+
+    /* ===== VALORACIONES ===== */
+    .mat-row { display:flex; align-items:flex-start; justify-content:space-between; gap:0.65rem; flex-wrap:wrap; width:100%; }
+    .mat-dif-wrap {
+      flex-shrink:0; font-size:0.62rem; color:rgba(255,255,255,0.38); line-height:1.3;
+      max-width:132px; text-align:right; padding:0 0.2rem;
+    }
+    .mat-dif-pcts { display:flex; flex-direction:column; gap:0.12rem; }
+    .mat-dif-pcts span b { color:rgba(255,255,255,0.52); font-weight:600; }
+    .mat-dif-vote { display:flex; gap:0.2rem; margin-top:0.28rem; justify-content:flex-end; flex-wrap:wrap; }
+    .mat-dif-btn {
+      font-size:0.56rem; padding:0.14rem 0.38rem; border-radius:100px;
+      border:1px solid rgba(255,255,255,0.12); background:transparent;
+      color:rgba(255,255,255,0.4); cursor:pointer; font-family:'Raleway',sans-serif; transition:all 0.12s;
+    }
+    .mat-dif-btn:hover { border-color:rgba(123,198,126,0.4); color:#7bc67e; }
+    .mat-dif-btn.on { border-color:rgba(123,198,126,0.55); color:#7bc67e; background:rgba(46,125,50,0.18); }
+    .mat-dif-sin-votos { font-size:0.58rem; color:rgba(255,255,255,0.22); font-style:italic; }
+    .btn-mat.btn-docs-toggle.active { filter:brightness(1.15); box-shadow:0 0 0 1px currentColor; }
+    .doc-drawer {
+      width:100%; margin-top:0.55rem; padding:0.65rem 0.75rem;
+      background:rgba(255,255,255,0.07); border-radius:10px; border:1px solid rgba(255,255,255,0.14);
+      overflow:hidden;
+      max-height:0; opacity:0; padding-top:0; padding-bottom:0;
+      transition: max-height 0.32s cubic-bezier(0.4,0,0.2,1),
+                  opacity 0.25s ease,
+                  padding 0.25s ease;
+    }
+    .doc-drawer.open {
+      max-height:600px; opacity:1;
+      padding:0.65rem 0.75rem;
+    }
+    @keyframes shimmer {
+      0%{background-position:-400px 0} 100%{background-position:400px 0}
+    }
+    .doc-skel {
+      height:14px; border-radius:6px; margin:0.4rem 0;
+      background: linear-gradient(90deg, rgba(255,255,255,0.05) 25%, rgba(255,255,255,0.12) 50%, rgba(255,255,255,0.05) 75%);
+      background-size: 800px 100%;
+      animation: shimmer 1.4s infinite;
+    }
+    .doc-drawer-hd {
+      display:flex; justify-content:space-between; align-items:center; gap:0.5rem;
+      margin-bottom:0.45rem; font-size:0.68rem; color:rgba(255,255,255,0.6);
+    }
+    .doc-drawer-hd a { color:rgba(123,198,126,0.75); font-size:0.65rem; text-decoration:none; }
+    .doc-drawer-hd a:hover { text-decoration:underline; }
+    .doc-file-list { display:flex; flex-direction:column; gap:0.35rem; }
+    .doc-file-row {
+      display:flex; align-items:center; gap:0.45rem; flex-wrap:wrap;
+      padding:0.35rem 0.45rem; border-radius:8px; background:rgba(255,255,255,0.08);
+    }
+    .doc-file-row.top-rated { border-left:2px solid rgba(255,193,7,0.45); }
+    .doc-file-link {
+      flex:1; min-width:0; font-size:0.74rem; color:#fff;
+      text-decoration:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+    }
+    .doc-file-link:hover { color:#7bc67e; }
+    .doc-file-score { font-size:0.62rem; color:rgba(255,193,7,0.85); white-space:nowrap; }
+    .val-stars-file { display:flex; gap:0; flex-shrink:0; }
+    .val-file-star {
+      background:none; border:none; color:rgba(255,255,255,0.15); cursor:pointer;
+      font-size:0.85rem; padding:0 0.04rem; line-height:1;
+    }
+    .val-file-star.on, .val-file-star:hover { color:#ffc107; }
+    .doc-loading, .doc-empty, .doc-err { font-size:0.72rem; color:rgba(255,255,255,0.35); padding:0.3rem 0; }
+    @media(max-width:600px) {
+      .mat-dif-wrap { max-width:100%; text-align:left; width:100%; order:3; }
+      .mat-dif-vote { justify-content:flex-start; }
+    }
+
+    /* ===== BADGE PROGRESO EN SEMESTRES ===== */
+    .sem-progress-wrap { width:100%; margin-top:0.6rem; }
+    .sem-progress-bar-bg {
+      width:100%; height:5px; background:rgba(255,255,255,0.1); border-radius:100px; overflow:hidden;
+    }
+    .sem-progress-bar-fill { height:100%; border-radius:100px; transition:width 0.4s ease; }
+    .sem-progress-pct { font-size:0.68rem; color:rgba(255,255,255,0.45); margin-top:0.25rem; }
+
+    /* ===== CARRERA GUARDADA EN INICIO ===== */
+    .mi-carrera-banner {
+      width:100%; max-width:560px; margin-bottom:1rem;
+      background:rgba(46,125,50,0.15); border:1px solid rgba(123,198,126,0.3);
+      border-radius:14px; padding:0.9rem 1.2rem;
+      display:flex; align-items:center; justify-content:space-between; gap:1rem;
+      animation:fadeUp 0.5s 0.35s ease both; cursor:pointer; transition:background 0.2s;
+    }
+    .mi-carrera-banner:hover { background:rgba(46,125,50,0.25); }
+    .mi-carrera-banner .mc-label { font-size:0.72rem; color:rgba(255,255,255,0.45); text-transform:uppercase; letter-spacing:0.1em; }
+    .mi-carrera-banner .mc-nombre { font-family:'Oswald',sans-serif; font-size:1.05rem; color:#7bc67e; font-weight:600; }
+    .mi-carrera-banner .mc-pct { font-family:'Oswald',sans-serif; font-size:1.6rem; font-weight:700; color:#7bc67e; white-space:nowrap; }
+
+    /* ===== NIVEL DEL ESTUDIANTE ===== */
+    .nivel-card {
+      width:100%; border-radius:14px; padding:1rem 1.2rem; margin-bottom:1rem;
+      background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.1);
+      text-align:center;
+    }
+    .nivel-icono { font-size:2.4rem; line-height:1; margin-bottom:0.3rem; }
+    .nivel-nombre { font-family:'Oswald',sans-serif; font-size:1.3rem; font-weight:700; color:#fff; }
+    .nivel-desc { font-size:0.75rem; color:rgba(255,255,255,0.4); margin:0.2rem 0 0.8rem; }
+    .nivel-xp-wrap { display:flex; align-items:center; gap:0.6rem; }
+    .nivel-xp-label { font-size:0.7rem; color:rgba(255,255,255,0.4); white-space:nowrap; }
+    .nivel-xp-bar-bg { flex:1; height:7px; background:rgba(255,255,255,0.1); border-radius:100px; overflow:hidden; }
+    .nivel-xp-bar-fill { height:100%; border-radius:100px; transition:width 0.5s ease; }
+
+    /* ===== TARJETA COMPARTIR ===== */
+    #share-canvas-wrap { display:none; }
+    .btn-compartir {
+      width:100%; padding:0.75rem; border-radius:12px; border:1.5px solid rgba(123,198,126,0.5);
+      cursor:pointer; font-family:'Oswald',sans-serif; font-size:0.95rem; font-weight:600;
+      background:rgba(123,198,126,0.12); color:#7bc67e;
+      transition:background 0.2s; margin-top:0.4rem; letter-spacing:0.04em;
+    }
+    .btn-compartir:hover { background:rgba(123,198,126,0.25); }
+
+    /* ===== MODAL PERFIL ===== */
+    .perfil-stat { display:flex; justify-content:space-between; align-items:center; padding:0.6rem 0; border-bottom:1px solid rgba(255,255,255,0.07); font-size:0.85rem; }
+    .perfil-stat:last-child { border:none; }
+    .perfil-stat .ps-label { color:rgba(255,255,255,0.45); }
+    .perfil-stat .ps-val { color:#fff; font-weight:600; }
+    .btn-danger { border-color:rgba(239,83,80,0.4) !important; color:#ef9a9a !important; margin-top:0.5rem; }
+    .btn-danger:hover { background:rgba(239,83,80,0.15) !important; color:#ef5350 !important; }
+
+    /* ===== DASHBOARD WIDGET ===== */
+    .dash-widget {
+      display:flex; align-items:center; gap:0.55rem;
+      background:rgba(10,10,10,0.82); border:1px solid rgba(255,255,255,0.10);
+      border-radius:100px; padding:0.32rem 0.85rem 0.32rem 0.6rem;
+      backdrop-filter:blur(14px); cursor:pointer;
+      transition:background 0.2s, border-color 0.2s;
+      position:relative; user-select:none;
+    }
+    .dash-widget:hover { background:rgba(30,30,30,0.95); border-color:rgba(123,198,126,0.3); }
+    .dash-widget .dw-dot {
+      width:7px; height:7px; border-radius:50%;
+      background:#7bc67e; flex-shrink:0;
+      box-shadow:0 0 6px #7bc67e;
+      animation:dashPulse 2s ease-in-out infinite;
+    }
+    @keyframes dashPulse {
+      0%,100%{opacity:1;box-shadow:0 0 5px #7bc67e;}
+      50%{opacity:0.5;box-shadow:0 0 2px #7bc67e;}
+    }
+    .dash-widget .dw-stats {
+      display:flex; align-items:center; gap:0.65rem;
+    }
+    .dash-widget .dw-stat {
+      display:flex; align-items:center; gap:0.28rem;
+      font-size:0.72rem; color:rgba(255,255,255,0.75);
+      white-space:nowrap;
+    }
+    .dash-widget .dw-stat .dw-val {
+      font-family:'Oswald',sans-serif; font-size:0.82rem;
+      color:#fff; font-weight:600;
+    }
+    .dash-widget .dw-sep {
+      width:1px; height:14px; background:rgba(255,255,255,0.13);
+    }
+    @media(max-width:600px) {
+      .dash-widget .dw-stat span:not(.dw-val) { display:none; }
+      .dash-widget .dw-sep { display:none; }
+      .dash-widget .dw-stats { gap:0.4rem; }
+      .dash-widget { padding:0.25rem 0.55rem 0.25rem 0.45rem; gap:0.35rem; }
+    }
+    /* Panel expandido */
+    .dash-panel {
+      position:absolute; top:calc(100% + 10px); left:0;
+      background:rgba(10,10,10,0.96); border:1px solid rgba(255,255,255,0.12);
+      border-radius:16px; padding:1rem 1.1rem; min-width:210px;
+      box-shadow:0 16px 48px rgba(0,0,0,0.7); backdrop-filter:blur(18px);
+      opacity:0; pointer-events:none; transform:translateY(-8px) scale(0.97);
+      transition:opacity 0.2s, transform 0.2s;
+      z-index:9999;
+    }
+    .dash-panel.open { opacity:1; pointer-events:all; transform:translateY(0) scale(1); }
+    .dash-panel .dp-title {
+      font-family:'Oswald',sans-serif; font-size:0.65rem; letter-spacing:0.18em;
+      text-transform:uppercase; color:rgba(255,255,255,0.35); margin-bottom:0.8rem;
+    }
+    .dash-panel .dp-row {
+      display:flex; justify-content:space-between; align-items:center;
+      padding:0.42rem 0; border-bottom:1px solid rgba(255,255,255,0.06);
+    }
+    .dash-panel .dp-row:last-child { border:none; padding-bottom:0; }
+    .dash-panel .dp-row .dp-lbl {
+      font-size:0.76rem; color:rgba(255,255,255,0.5); display:flex; align-items:center; gap:0.4rem;
+    }
+    .dash-panel .dp-row .dp-num {
+      font-family:'Oswald',sans-serif; font-size:1rem; font-weight:700; color:#7bc67e;
+    }
+    .dash-panel .dp-materia {
+      margin-top:0.6rem; padding-top:0.6rem; border-top:1px solid rgba(255,255,255,0.07);
+    }
+    .dash-panel .dp-materia .dp-lbl { margin-bottom:0.25rem; }
+    .dash-panel .dp-materia .dp-mat-name {
+      font-family:'Oswald',sans-serif; font-size:0.88rem; color:#fff; font-weight:600;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:170px;
+    }
+    .dash-panel .dp-materia .dp-mat-sub {
+      font-size:0.68rem; color:rgba(255,255,255,0.35); margin-top:0.1rem;
+    }
+    /* Topbar flex fix para alinear widget a la izquierda */
+    .topbar { justify-content:space-between !important; }
+    .topbar-left { display:flex; align-items:center; }
+    .topbar-right { display:flex; flex-direction:row; align-items:center; gap:0.4rem; }
+
+    /* ===== BOTÓN MAPA ===== */
+    .btn-mapa-top {
+      background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.18);
+      color:rgba(255,255,255,0.82); padding:0.32rem 0.8rem; border-radius:100px;
+      font-size:0.75rem; cursor:pointer; transition:background 0.2s, border-color 0.2s;
+      font-family:'Raleway',sans-serif; font-weight:600; display:flex; align-items:center; gap:0.3rem;
+      white-space:nowrap;
+    }
+    .btn-mapa-top:hover { background:rgba(255,255,255,0.16); border-color:rgba(255,255,255,0.35); }
+
+    /* ===== MODAL MAPA ===== */
+    .modal-overlay.mapa-overlay { padding:0.5rem; }
+    .modal-mapa-box {
+      background:#0d0d0d; border:1px solid rgba(255,255,255,0.1);
+      border-radius:18px; width:100%; max-width:860px;
+      max-height:92vh; display:flex; flex-direction:column; overflow:hidden;
+      transform:translateY(24px) scale(0.97);
+      transition:transform 0.28s cubic-bezier(.26,1.4,.46,.97);
+    }
+    .modal-overlay.mapa-overlay.open .modal-mapa-box { transform:translateY(0) scale(1); }
+    .mapa-header {
+      display:flex; align-items:center; justify-content:space-between;
+      padding:0.75rem 1.2rem; border-bottom:1px solid rgba(255,255,255,0.08);
+      flex-shrink:0;
+    }
+    .mapa-header-tit {
+      font-family:'Oswald',sans-serif; font-size:1rem; font-weight:600;
+      color:#fff; letter-spacing:0.06em; display:flex; align-items:center; gap:0.5rem;
+    }
+    .mapa-img-wrap {
+      overflow:auto; flex:1; display:flex; align-items:center; justify-content:center;
+      padding:0.75rem; background:#0a0a0a;
+    }
+    .mapa-img-wrap img {
+      max-width:100%; height:auto; border-radius:10px;
+      display:block; user-select:none;
+    }
+    .btn-cerrar-mapa {
+      background:rgba(255,255,255,0.08); border:1px solid rgba(255,255,255,0.15);
+      color:#fff; border-radius:100px; padding:0.35rem 1rem;
+      font-size:0.78rem; cursor:pointer; font-family:'Raleway',sans-serif; font-weight:600;
+      transition:background 0.15s;
+    }
+    .btn-cerrar-mapa:hover { background:rgba(255,255,255,0.18); }
+  </style>
+</head>
+<body>
+
+<!-- ===== SPLASH SCREEN PWA ===== -->
+<div id="pwa-splash">
+  <img class="splash-logo" src="logo.png" alt="Logo FCAPyF">
+  <p class="splash-nombre">Biblioteca <span>FCAPyF</span></p>
+  <p class="splash-sub">UMSS · Cochabamba</p>
+</div>
+<script>
+  (function(){
+    var splash = document.getElementById('pwa-splash');
+    if(!splash) return;
+    // Solo mostrar en modo standalone (PWA instalada) o primera vez
+    var esPWA = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+    if(!esPWA && sessionStorage.getItem('splash_visto')) {
+      splash.style.display = 'none';
+      return;
+    }
+    sessionStorage.setItem('splash_visto', '1');
+    window.addEventListener('load', function(){
+      setTimeout(function(){
+        splash.classList.add('ocultar');
+        setTimeout(function(){ splash.style.display='none'; }, 750);
+      }, 1800);
+    });
+  })();
+</script>
+
+<div class="fondo" id="fondo"></div>
+
+<!-- BANNER INSTALAR APP (desaparece en 10 seg) -->
+<div id="pwa-banner" style="display:none;position:fixed;bottom:1.2rem;left:50%;transform:translateX(-50%);z-index:150;
+  background:rgba(12,12,12,0.97);border:1px solid rgba(123,198,126,0.45);border-radius:14px;
+  padding:0.8rem 1rem;align-items:center;gap:0.75rem;
+  box-shadow:0 8px 32px rgba(0,0,0,0.65);backdrop-filter:blur(14px);
+  max-width:340px;width:92%;transition:opacity 0.5s ease;">
+  <span style="font-size:1.5rem;flex-shrink:0">📲</span>
+  <div style="flex:1">
+    <div style="font-family:'Oswald',sans-serif;font-size:0.9rem;color:#fff;font-weight:600;line-height:1.2">Agregar a la pantalla de inicio</div>
+    <div id="pwa-banner-sub" style="font-size:0.68rem;color:rgba(255,255,255,0.4);margin-top:0.2rem;line-height:1.4">Acceso directo desde tu celular, igual que una app</div>
+  </div>
+  <button id="pwa-btn-instalar" onclick="pwaInstalar()" style="background:linear-gradient(135deg,#1b5e20,#7bc67e);border:none;color:#fff;
+    border-radius:10px;padding:0.42rem 0.85rem;font-family:'Oswald',sans-serif;font-size:0.8rem;
+    font-weight:600;cursor:pointer;white-space:nowrap;flex-shrink:0;">Agregar</button>
+  <button onclick="pwaCerrarBanner()" style="background:none;border:none;
+    color:rgba(255,255,255,0.3);cursor:pointer;font-size:1.1rem;padding:0 0.15rem;line-height:1;flex-shrink:0">✕</button>
+</div>
+
+<!-- Modal instrucciones manuales para iOS / navegadores sin prompt -->
+<div id="pwa-modal-manual" style="display:none;position:fixed;inset:0;z-index:300;background:rgba(0,0,0,0.78);
+  align-items:flex-end;justify-content:center;padding:1rem;backdrop-filter:blur(6px);">
+  <div style="background:#0f0f0f;border:1px solid rgba(123,198,126,0.35);border-radius:20px;
+    padding:1.8rem 1.6rem 1.4rem;width:100%;max-width:380px;position:relative;">
+    <button onclick="document.getElementById('pwa-modal-manual').style.display='none'"
+      style="position:absolute;top:1rem;right:1rem;background:none;border:none;
+      color:rgba(255,255,255,0.35);cursor:pointer;font-size:1.2rem;line-height:1">✕</button>
+    <div style="font-family:'Oswald',sans-serif;font-size:1.25rem;color:#fff;font-weight:700;margin-bottom:0.5rem">
+      Cómo agregar al inicio
+    </div>
+    <div id="pwa-manual-steps" style="font-size:0.82rem;color:rgba(255,255,255,0.65);line-height:1.8"></div>
+    <div style="margin-top:1.2rem;font-size:0.72rem;color:rgba(255,255,255,0.28);font-style:italic">
+      Necesitás conexión a internet para usar la biblioteca.
+    </div>
+  </div>
+</div>
+
+<!-- TOPBAR USUARIO -->
+<div class="topbar" id="topbar">
+  <!-- WIDGET DASHBOARD (izquierda) -->
+  <div class="topbar-left">
+    <div class="dash-widget" id="dash-widget" onclick="toggleDashPanel(event)">
+      <div class="dw-dot"></div>
+      <div class="dw-stats">
+        <div class="dw-stat"><span id="dw-usuarios" class="dw-val">—</span><span>en línea</span></div>
+        <div class="dw-sep"></div>
+        <div class="dw-stat"><span id="dw-docs" class="dw-val">—</span><span>docs hoy</span></div>
+      </div>
+      <!-- Panel expandido -->
+      <div class="dash-panel" id="dash-panel">
+        <div class="dp-title">📊 Actividad en vivo</div>
+        <div class="dp-row">
+          <span class="dp-lbl">🟢 Usuarios conectados ahora</span>
+          <span class="dp-num" id="dp-usuarios">—</span>
+        </div>
+        <div class="dp-row">
+          <span class="dp-lbl">📂 Documentos abiertos hoy</span>
+          <span class="dp-num" id="dp-docs">—</span>
+        </div>
+        <div class="dp-materia">
+          <div class="dp-lbl">🔥 Materia más visitada</div>
+          <div class="dp-mat-name" id="dp-materia-nombre">—</div>
+          <div class="dp-mat-sub" id="dp-materia-sub"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <!-- Contenido derecho (login/usuario) -->
+  <div class="topbar-right">
+    <button class="btn-mapa-top" onclick="abrirMapa()">🗺️ Mapa</button>
+    <div id="topbar-content"></div>
+  </div>
+</div>
+
+<!-- MODAL SIS -->
+<div class="modal-overlay" id="modal-auth">
+  <div class="modal-box">
+    <h2>🎓 Mi Progreso</h2>
+    <p class="modal-sub">Ingresa tu código SIS de la UMSS para guardar y recuperar tus materias vencidas. Si es tu primera vez, tu perfil se crea automáticamente.</p>
+    <div class="pin-label">Código SIS · 9 dígitos (ej: 2021·****·*)</div>
+    <div class="pin-boxes" id="pin-boxes-auth">
+      <input class="pin-box" id="pin0" type="password" inputmode="numeric" maxlength="1" />
+      <input class="pin-box" id="pin1" type="password" inputmode="numeric" maxlength="1" />
+      <input class="pin-box" id="pin2" type="password" inputmode="numeric" maxlength="1" />
+      <input class="pin-box" id="pin3" type="password" inputmode="numeric" maxlength="1" />
+      <div class="pin-sep"></div>
+      <input class="pin-box" id="pin4" type="password" inputmode="numeric" maxlength="1" />
+      <input class="pin-box" id="pin5" type="password" inputmode="numeric" maxlength="1" />
+      <div class="pin-sep"></div>
+      <input class="pin-box" id="pin6" type="password" inputmode="numeric" maxlength="1" />
+      <input class="pin-box" id="pin7" type="password" inputmode="numeric" maxlength="1" />
+      <input class="pin-box" id="pin8" type="password" inputmode="numeric" maxlength="1" />
+    </div>
+    <div class="modal-error" id="pin-error"></div>
+    <button class="modal-btn-primary" id="btn-pin-entrar" onclick="doLoginPin()">Entrar →</button>
+    <button class="modal-btn-secondary" onclick="cerrarModal('modal-auth')">Continuar sin código</button>
+  </div>
+</div>
+
+<!-- MODAL ELEGIR CARRERA -->
+<div class="modal-overlay" id="modal-carrera">
+  <div class="modal-box">
+    <h2>🌿 Mi Carrera</h2>
+    <p class="modal-sub">Elige tu carrera para que aparezca siempre en tu pantalla principal.</p>
+    <div style="display:flex;flex-direction:column;gap:0.5rem;margin-bottom:1rem;">
+      <button class="modal-btn-primary" style="background:linear-gradient(135deg,#c0392b,#e74c3c)" onclick="elegirCarrera('agronomia')">🌾 Ing. Agronómica</button>
+      <button class="modal-btn-primary" style="background:linear-gradient(135deg,#2471a3,#3498db)" onclick="elegirCarrera('agroindustrial')">🏭 Ing. Agroindustrial</button>
+      <button class="modal-btn-primary" style="background:linear-gradient(135deg,#7d3c98,#9b59b6)" onclick="elegirCarrera('agricola')">💧 Ing. Agrícola</button>
+      <button class="modal-btn-primary" style="background:linear-gradient(135deg,#1e8449,#27ae60)" onclick="elegirCarrera('zootecnia')">🐄 Ag. Zootecnista</button>
+      <button class="modal-btn-primary" style="background:linear-gradient(135deg,#d35400,#e67e22)" onclick="elegirCarrera('fitotecnia')">🌱 Agronomía Fitotecnista</button>
+    </div>
+    <button class="modal-btn-secondary" onclick="cerrarModal('modal-carrera')">Ahora no</button>
+  </div>
+</div>
+
+<!-- MODAL PERFIL -->
+<div class="modal-overlay" id="modal-perfil">
+  <div class="modal-box">
+    <h2>🌿 Mi Progreso</h2>
+    <p class="modal-sub" id="perfil-bienvenida"></p>
+    <div id="perfil-stats"></div>
+    <button class="btn-compartir" onclick="compartirProgreso()">📲 Compartir mi progreso</button>
+    <button class="modal-btn-secondary btn-danger" onclick="doLogout()">🚪 Cerrar sesión</button>
+    <button class="modal-btn-secondary" onclick="cerrarModal('modal-perfil')">Cerrar</button>
+  </div>
+</div>
+
+<canvas id="share-canvas" style="display:none"></canvas>
+
+<!-- MODAL MAPA -->
+<div class="modal-overlay mapa-overlay" id="modal-mapa" onclick="cerrarMapaSiOverlay(event)">
+  <div class="modal-mapa-box">
+    <div class="mapa-header">
+      <div class="mapa-header-tit">🗺️ Mapa del Campus — FCAPyF</div>
+      <button class="btn-cerrar-mapa" onclick="cerrarModal('modal-mapa')">✕ Cerrar</button>
+    </div>
+    <div class="mapa-img-wrap">
+      <img src="mapa.jpg" alt="Mapa del campus FCAPyF" draggable="false"
+           onerror="this.parentNode.innerHTML='<div style=\'color:rgba(255,255,255,0.35);font-size:0.85rem;padding:2rem;text-align:center\'>⚠️ No se encontró el archivo <b>mapa.jpg</b>.<br>Súbelo a GitHub junto al index.html.</div>'" />
+    </div>
+  </div>
+</div>
+
+<!-- MODAL CALENDARIO -->
+<div class="modal-overlay mapa-overlay" id="modal-calendario" onclick="cerrarCalendarioSiOverlay(event)">
+  <div class="modal-mapa-box">
+    <div class="mapa-header">
+      <div class="mapa-header-tit">📅 Calendario Académico — FCAPyF</div>
+      <button class="btn-cerrar-mapa" onclick="cerrarModal('modal-calendario')">✕ Cerrar</button>
+    </div>
+    <div class="mapa-img-wrap">
+      <img src="calendario.jpg" alt="Calendario Académico FCAPyF" draggable="false"
+           onerror="this.parentNode.innerHTML='<div style=\'color:rgba(255,255,255,0.35);font-size:0.85rem;padding:2rem;text-align:center\'>⚠️ No se encontró el archivo <b>calendario.jpg</b>.<br>Súbelo a GitHub junto al index.html.</div>'" />
+    </div>
+  </div>
+</div>
+<div class="wrap">
+
+  <!-- PANTALLA 1: INICIO -->
+  <div class="screen active" id="inicio">
+    <div class="logo-wrap"><img src="logo.png" alt="Logo FCAPyF"/></div>
+    <div class="tit-bib">Biblioteca Virtual</div>
+    <div class="tit-fac">FCAPyF · <span>UMSS</span></div>
+    <div style="font-family:'Raleway',sans-serif; font-size:0.78rem; color:rgba(255,255,255,0.35); letter-spacing:0.18em; margin-top:0.3rem; animation:fadeUp 0.5s 0.25s ease both;">by Pallares Aro</div>
+    <div class="subtitulo">"El conocimiento es la semilla del progreso."</div>
+    <div id="mi-carrera-banner-wrap" style="width:100%;max-width:560px;animation:fadeUp 0.5s 0.35s ease both;"></div>
+    <div class="carreras-grid">
+      <div class="carrera-btn c1" onclick="verCarrera('agronomia')">
+        <span class="icon">🌾</span>
+        <div><div class="label">Carrera</div><div class="nombre">Ing. Agronómica</div></div>
+      </div>
+      <div class="carrera-btn c2" onclick="verCarrera('agroindustrial')">
+        <span class="icon">🏭</span>
+        <div><div class="label">Carrera</div><div class="nombre">Ing. Agroindustrial</div></div>
+      </div>
+      <div class="carrera-btn c3" onclick="verCarrera('agricola')">
+        <span class="icon">💧</span>
+        <div><div class="label">Carrera</div><div class="nombre">Ing. Agrícola</div></div>
+      </div>
+      <div class="carrera-btn c4" onclick="verCarrera('zootecnia')">
+        <span class="icon">🐄</span>
+        <div><div class="label">Carrera</div><div class="nombre">Ag. Zootecnista</div></div>
+      </div>
+      <div class="carrera-btn c5 full" onclick="verCarrera('fitotecnia')">
+        <span class="icon">🌱</span>
+        <div><div class="label">Carrera</div><div class="nombre">Agronomía Fitotecnista</div></div>
+      </div>
+    </div>
+    <div onclick="abrirCalendario()" style="
+      width:100%;max-width:560px;margin-top:0.6rem;
+      background:rgba(20,60,80,0.72);border:1px solid rgba(30,110,142,0.45);
+      border-radius:16px;padding:1.1rem 1.4rem;
+      display:flex;align-items:center;gap:1rem;
+      cursor:pointer;transition:transform 0.2s,box-shadow 0.2s;
+      backdrop-filter:blur(8px);animation:fadeUp 0.6s 0.5s ease both;
+      -webkit-tap-highlight-color:rgba(255,255,255,0.1);"
+      onmouseenter="this.style.transform='translateY(-3px)';this.style.boxShadow='0 10px 32px rgba(0,0,0,0.5)'"
+      onmouseleave="this.style.transform='';this.style.boxShadow=''">
+      <span style="font-size:1.8rem;flex-shrink:0">📅</span>
+      <div>
+        <div style="font-family:'Oswald',sans-serif;font-size:1.1rem;font-weight:600;color:#fff;letter-spacing:0.04em">Calendario Académico</div>
+      </div>
+    </div>
+    <a href="https://drive.google.com/drive/folders/1pNFcfW38B5f6Zk-v8AmvYavty6XYwf16?usp=sharing" target="_blank" rel="noopener" style="
+      width:100%;max-width:560px;margin-top:0.6rem;
+      background:rgba(60,30,10,0.72);border:1px solid rgba(160,90,30,0.45);
+      border-radius:16px;padding:1.1rem 1.4rem;
+      display:flex;align-items:center;gap:1rem;
+      cursor:pointer;transition:transform 0.2s,box-shadow 0.2s;
+      backdrop-filter:blur(8px);animation:fadeUp 0.6s 0.6s ease both;
+      text-decoration:none;-webkit-tap-highlight-color:rgba(255,255,255,0.1);"
+      onmouseenter="this.style.transform='translateY(-3px)';this.style.boxShadow='0 10px 32px rgba(0,0,0,0.5)'"
+      onmouseleave="this.style.transform='';this.style.boxShadow=''">
+      <span style="font-size:1.8rem;flex-shrink:0">📜</span>
+      <div>
+        <div style="font-family:'Oswald',sans-serif;font-size:1.1rem;font-weight:600;color:#fff;letter-spacing:0.04em">Estatuto UMSS</div>
+      </div>
+    </a>
+    <div class="footer-txt">© 2026 Biblioteca Virtual FCAPyF · Universidad Mayor de San Simón · Cochabamba, Bolivia</div>
+  </div>
+
+  <!-- PANTALLA 2: SEMESTRES DE CARRERA -->
+  <div class="screen" id="carrera">
+    <button class="btn-back" onclick="verInicio()">&#8592; Inicio</button>
+    <div class="carrera-titulo" id="carrera-titulo"></div>
+    <div class="carrera-sub">Selecciona el semestre para ver el material disponible</div>
+    <div class="semestres-grid" id="semestres-grid"></div>
+  </div>
+
+  <!-- PANTALLA 3: MATERIAS DEL SEMESTRE -->
+  <div class="screen" id="semestre">
+    <button class="btn-back" onclick="verCarreraActual()">&#8592; Semestres</button>
+    <div class="sem-titulo" id="sem-titulo"></div>
+    <div class="sem-carrera-nombre" id="sem-carrera-nombre"></div>
+    <div class="materias-lista" id="materias-lista"></div>
+  </div>
+
+</div>
+
+<script>
+// ===== MATERIAS COMPARTIDAS (una carpeta para todas las carreras) =====
+// Clave: nombre de materia normalizado (minúsculas, sin tildes, sin caracteres especiales)
+// Valor: {a, p, e} con los links de Drive compartidos
+const compartidas = (() => {
+  const raw = {
+    'Comercialización y Mercadeo': { a: 'https://drive.google.com/drive/folders/1N9JmiP8b4-5skvqyJbL7kfk8dzPbnOFA', p: 'https://drive.google.com/drive/folders/1lwP3d7mItnFsal7PGyyMvV2aEs8wYGZX', e: 'https://drive.google.com/drive/folders/1yP4LxLofVnHyovUXQOt5vDmpejNhncpR' },
+    'Postcosecha': { a: 'https://drive.google.com/drive/folders/1Wk-FKNjyeJC5z-86VOk8lzoRFmcaaXdN', p: 'https://drive.google.com/drive/folders/1rFKbJsrSNWnBXI4jWCqgeZhzZxSR-6dm', e: 'https://drive.google.com/drive/folders/16iy__k2-Ayb8c8bdOEPGVgKP5H3lVXPi' },
+    'Manejo Integrado de Plagas': { a: 'https://drive.google.com/drive/folders/1vBuzOUxt6l3mNIOeE4Pltd155VeZWtds', p: 'https://drive.google.com/drive/folders/1mN7I5_-fjWBav0ywA-hT4GH2r-NIpPuv', e: 'https://drive.google.com/drive/folders/11BQHivyV5UTVPpcrNLT4gz7bCXhI6S_X' },
+    'Preparación y Evaluación de Proyectos': { a: 'https://drive.google.com/drive/folders/1RdZQQx9xnwK99Rxbbh42PGMZ1GxLA5xL', p: 'https://drive.google.com/drive/folders/1yas-qmMEOO3pL8-wJ3QRIQ8FsPHKRf8x', e: 'https://drive.google.com/drive/folders/1yyQgnTeabzPQEa6jYvTwXJkhazoOpfFb' },
+    'Riegos y Drenajes': { a: 'https://drive.google.com/drive/folders/1cTfzuMGbw6wC1YGNIa8V5wZQT4gsajM-', p: 'https://drive.google.com/drive/folders/1Dy2t-bD-sX2D0sPrbC6klSFhIZcKDsm1', e: 'https://drive.google.com/drive/folders/1R9lLHn3k2p1ZxouuiZqskg8LNICSy057' },
+    'Riego y Drenajes': { a: 'https://drive.google.com/drive/folders/1cTfzuMGbw6wC1YGNIa8V5wZQT4gsajM-', p: 'https://drive.google.com/drive/folders/1Dy2t-bD-sX2D0sPrbC6klSFhIZcKDsm1', e: 'https://drive.google.com/drive/folders/1R9lLHn3k2p1ZxouuiZqskg8LNICSy057' },
+    'Modalidades de Titulación': { a: 'https://drive.google.com/drive/folders/1E1Xfws_w1KXQHGz7cZ5HAlN7CznAN3VK', p: 'https://drive.google.com/drive/folders/1xMChsY1Acx4oPqaecNit0yxLgknW671q', e: 'https://drive.google.com/drive/folders/1ceIDWvWUzJkTaM52z3cIWB5nJ0PBdVs2' },
+    'Biotecnología I': { a: 'https://drive.google.com/drive/folders/1EtgiGbtFfqEgj8ANdfhnpaRqJfZ1wBTR', p: 'https://drive.google.com/drive/folders/1GSY81olJBymbz4Jm0_xS1updqrPA9zRG', e: 'https://drive.google.com/drive/folders/1UkcUr0vdW7Vai3jRftPyy31r3tkdb_A2' },
+    'Agronegocios': { a: 'https://drive.google.com/drive/folders/1OJwKmrBA8s-f-XpDUDgt79VO_WXd35ei', p: 'https://drive.google.com/drive/folders/16QCSVLdqqP2fxjqi5rMs5q7BzY_5KVff', e: 'https://drive.google.com/drive/folders/1TBRh921SwORNQITGMM_YbQZ7p3NlIQqx' },
+    'Extensión Agrícola': { a: 'https://drive.google.com/drive/folders/1fnl_4t6GM7PVMJILkK1AlCpSUI2REKLh', p: 'https://drive.google.com/drive/folders/145SB9EZjeQdojMDxdN-uNsPNbK3rwDVn', e: 'https://drive.google.com/drive/folders/1KGfdhGB60fDhh-K9dqpsnxK8Eh0uyUbc' },
+    'Administración de Empresas': { a: 'https://drive.google.com/drive/folders/148oSecBjMGQGbl76TSLUe6Hp8t_fnzWf', p: 'https://drive.google.com/drive/folders/1xzubUTI5JYzVkkTr14jKuwYacXmUYmtw', e: 'https://drive.google.com/drive/folders/1kve4IUu5sAdS-IgYo79vR-q64N0RO0_q' },
+    'Bovinotecnia de la Leche': { a: 'https://drive.google.com/drive/folders/1WNLib9SsZi3xyO8pdb-63D130XQLxuvG', p: 'https://drive.google.com/drive/folders/14-9qGGWCTqFlxq0e538cez5O1p_kkWaD', e: 'https://drive.google.com/drive/folders/1ZkIGeaqZaeeNB0RGV2c0lE_lCaGpTExO' },
+    'Producción Avícola': { a: 'https://drive.google.com/drive/folders/1tmlsPn1WU1-pPUfshCjtmBvtIhikXDfQ', p: 'https://drive.google.com/drive/folders/1nF3IWbHKANqFaEG4ytzUv0O2epTqiXSs', e: 'https://drive.google.com/drive/folders/1SDN5ic20QWiLgLH5_S4zqYMbPBaM4vh5' },
+    'Planificación y Proyectos': { a: 'https://drive.google.com/drive/folders/12moNWa2QipX0lApgTDh2LPcbXb05KbLm', p: 'https://drive.google.com/drive/folders/1yFYAUCyVcQo9u0h8xafm2nH3OBRQZ1Gl', e: 'https://drive.google.com/drive/folders/1-8SM98pxg51rFRM4k3e8pwScALba-7Q0' },
+    'Agricultura Tropical': { a: 'https://drive.google.com/drive/folders/1TopR_WYH31RhUkGjlHZPJaTIO5e7cWTe', p: 'https://drive.google.com/drive/folders/1OPFsx15aY9xHVihFooXa09Rxawh5c3BY', e: 'https://drive.google.com/drive/folders/1vBLhVczvYIWD2Kdvd8QodYVjkhR6g-rG' },
+    'Tecnología Agrícola': { a: 'https://drive.google.com/drive/folders/1bz4eQbkUeLosEn9QiTllH54Ns79B59rE', p: 'https://drive.google.com/drive/folders/1WApsDFKskQ53qFBmn23ApuOLwLxMgav0', e: 'https://drive.google.com/drive/folders/1X9Uz_2Tw5vrDUJZ1hQScod3mQYKdguX6' },
+    'Pastos y Forrajes': { a: 'https://drive.google.com/drive/folders/1dw1b3NzMRSVNtEuvVyt9oy0G7VULBj2e', p: 'https://drive.google.com/drive/folders/1uo_4oFUa0cqcVi9jzPYnMnU6LE2_I0ai', e: 'https://drive.google.com/drive/folders/11lRFcDJLp420D133NpCplZKe8SLx4G-b' },
+    'Fruticultura General': { a: 'https://drive.google.com/drive/folders/1sU2flr0CmZdKiwrgj5qVcb2uYKDB2af7', p: 'https://drive.google.com/drive/folders/1UJIUiCiVkzPCTzQOP9CXCDNbUowwGtbD', e: 'https://drive.google.com/drive/folders/1rYEVWoq2DqBkxhrWzY7FZo1gLDvMZ_1M' },
+    'Diseños Experimentales': { a: 'https://drive.google.com/drive/folders/1KhCm5gug7HdT_k8zWBJ5tv0hD0B1eaKI', p: 'https://drive.google.com/drive/folders/1pL0TSyA-oquo9d1xIZ4p_DOrrIZUGzoh', e: 'https://drive.google.com/drive/folders/184AD8o49xHbVUwkLuUkHTTVKTMsABJ4T' },
+    'Dasonomía': { a: 'https://drive.google.com/drive/folders/1D45chIYWQnNuqnyAFkEo-p3hmIY7Hvhl', p: 'https://drive.google.com/drive/folders/1xekOBwTGBRMNx_nJ1894lQYGFVCHscqm', e: 'https://drive.google.com/drive/folders/1dWdZ6FvbNYor2xDkTTqF_Q_C5Jg9Jm0C' },
+    'Sanidad Animal': { a: 'https://drive.google.com/drive/folders/1xyjBLLnunSwG7YKKPUQH9h_mdmyJ04Wd', p: 'https://drive.google.com/drive/folders/1obUXB7-F0IanvyQXnw17bPAcGvrGLWGE', e: 'https://drive.google.com/drive/folders/1dhImRizPFwLOs4_CsFRiX9eVww10C47j' },
+    'Comunicación Agrícola': { a: 'https://drive.google.com/drive/folders/1Y1lwy93Snm3hZV-GilPY3-tsp-sfMIIS', p: 'https://drive.google.com/drive/folders/1fPJaPBjFtPwQgqqbDDn4YlyyL5p9KGfV', e: 'https://drive.google.com/drive/folders/1qYo0AZbvqivyd0FkpTOWHt2R7d5vbcXD' },
+    'Entomología': { a: 'https://drive.google.com/drive/folders/1ukSumKft_RZ89l-uTaPf9M3aqe-hsLCU', p: 'https://drive.google.com/drive/folders/1pCGeOUAN-CSVJA126b784squOf55kM1Z', e: 'https://drive.google.com/drive/folders/1hVsn4TMG11pNIGkCf9tM-SLAQfMUvWoN' },
+    'Agricultura General': { a: 'https://drive.google.com/drive/folders/1aYEe8ShuKj3YKjtJj20qYRqt-pRMghBo', p: 'https://drive.google.com/drive/folders/1hc6P2M4axkTOgh9PDqDZkywTUJE6MtCP', e: 'https://drive.google.com/drive/folders/1jUqc2GNugYFPnZZs1wm-IgGFCjQU4GtF' },
+    'Genética General': { a: 'https://drive.google.com/drive/folders/1unysOOpp5xnJkg4ZSM393Wuz1cSaHgPQ', p: 'https://drive.google.com/drive/folders/15onV7Qi7pPBDuqcQeuDE4QJ1mzwdUrP6', e: 'https://drive.google.com/drive/folders/1ave6QC1LtzpR9rAye9eGM5-BWOSX6tWW' },
+    'Fitopatología': { a: 'https://drive.google.com/drive/folders/1kygkH0ddzzjyFZ4Qb__-LaL7jg6sgaoJ', p: 'https://drive.google.com/drive/folders/1QDuCcv3M51BnZLT3KATfSBSGnLxrL3e0', e: 'https://drive.google.com/drive/folders/1qBMj0GzEeYuyrSJ7TmUR_45-pJCcLNa6' },
+    'Nutrición Animal': { a: 'https://drive.google.com/drive/folders/1F7liAtFy3lHzFj3yNwLpitpKmOMY1LSw', p: 'https://drive.google.com/drive/folders/10OW88N9qygcG_92MWzXHIxRYifVgtBC8', e: 'https://drive.google.com/drive/folders/19KXRP-b8iNOkvsD31yqBhZP4A5z1YFZO' },
+    'Biometría y Estadística': { a: 'https://drive.google.com/drive/folders/1awN53pTirYMCYvFmJfHCrjXc_DhuA83A', p: 'https://drive.google.com/drive/folders/193ZJAms3ewQeGRWpTTwu1-7Kz83CB_NO', e: 'https://drive.google.com/drive/folders/1YORvaejCT0bR0SSs3k0sAQDLKhBdxJ9e' },
+    'Fisiología Vegetal': { a: 'https://drive.google.com/drive/folders/1a6uUvGfZ9Dep80a0trHvl86NbS_4SoKG', p: 'https://drive.google.com/drive/folders/1KqsZXHQFxN_Dxxoch9TxHeNZWzjJJxmC', e: 'https://drive.google.com/drive/folders/1loB2etZzwYhjbaFqwUvhq_dANisnvrsG' },
+    'Manejo y Conservación de Suelos': { a: 'https://drive.google.com/drive/folders/1y0JoK-sP_gZCOa-t4jvcTiCfaT2TUpBz', p: 'https://drive.google.com/drive/folders/1jixF6rTcOZP-_vddhKsNhq99nUyqh0hV', e: 'https://drive.google.com/drive/folders/17RX5oAfFiM-fSWF8LgfxlzfnOM6sNXUJ' },
+    'Construcciones Rurales': { a: 'https://drive.google.com/drive/folders/1W6aw5B4zN9Pict91nRqOi4MdyfVEKSj4', p: 'https://drive.google.com/drive/folders/1h31SauyUlnzKMjW2o2ZMQUHl8SR6Sn0p', e: 'https://drive.google.com/drive/folders/15RmMa3CUYHnz4UvqjQY85PPQji9709o6' },
+    'Zootecnia General': { a: 'https://drive.google.com/drive/folders/1qZlZS6Ku10nUMfywVvxWo1fuqt3_tUHJ', p: 'https://drive.google.com/drive/folders/1VlB0-5aGHtIrEHShQAcbjgWh4RMf4GKA', e: 'https://drive.google.com/drive/folders/1n5X_dG6X5CDevlKEkJ2pFe2k-XqmnvQ5' },
+    'Economía Agrícola': { a: 'https://drive.google.com/drive/folders/1ksY3J0mRpO1_SW26UCRnFSyGNqsIywNu', p: 'https://drive.google.com/drive/folders/1IVMxOyDfMHsiC2no3DxaqtUINNBxBN1T', e: 'https://drive.google.com/drive/folders/1uKDrlF6hKucDc80aArSkDVOjqk6ljCgG' },
+    'Maquinaria Agrícola': { a: 'https://drive.google.com/drive/folders/1HnF-UN5c6XxcOdD3rAyzejGpWfiun3NH', p: 'https://drive.google.com/drive/folders/1TNaLa0RIYKI7dsSXbUPETAraFeqLxdSk', e: 'https://drive.google.com/drive/folders/13cUaY7wuhUusVLZlt8dU-xQQpmaBrL13' },
+    'Informática': { a: 'https://drive.google.com/drive/folders/1vRstUGh5Kbc2i9EPsrmeHQgQDODKsHqk', p: 'https://drive.google.com/drive/folders/1DsiirV7Zp7wkiOjHBHwVWluGOTWlp7F_', e: 'https://drive.google.com/drive/folders/14N4gFcUUUJcmtuac5PzXITc2DY-CGt_1' },
+    'Hidráulica': { a: 'https://drive.google.com/drive/folders/1Y-ckeJbmQBDJQ9e-z-sVT3PtOWfx5_jC', p: 'https://drive.google.com/drive/folders/13m-lOYrs1FDwLuneutRV3d7kUpkX7jAa', e: 'https://drive.google.com/drive/folders/1b4gXtsjPIiCdoB2Hc80NJ4CwM2gxmFe1' },
+    'Fertilidad y Fertilizantes': { a: 'https://drive.google.com/drive/folders/1pGT_aYp3I9Pxb8vRJLz3iSfNVAtKro53', p: 'https://drive.google.com/drive/folders/1D6wSQWY9bXJryQpp_Qd1VifDb5cgf6Gg', e: 'https://drive.google.com/drive/folders/1UVplrQWOYSAWn17Xyx9sOJn0xefYxqgB' },
+    'Bioquímica Agrícola': { a: 'https://drive.google.com/drive/folders/1zcwom4wMpzvklz08_JUCc09CZsIw9v_U', p: 'https://drive.google.com/drive/folders/1MhLg1J-GKoj7F73fGHieUCdHu7vRW0R7', e: 'https://drive.google.com/drive/folders/1EpUmQcFrGTNVgAF_m4AXyap9Zy0UMPwW' },
+    'Derecho Agrario': { a: 'https://drive.google.com/drive/folders/1eetTfwevBSfpNsXfJp1UEs7nPknemftl', p: 'https://drive.google.com/drive/folders/1lauI0mFCGD71uVAX8Eqahfqc_sOWkN1V', e: 'https://drive.google.com/drive/folders/1C90N9wPVUzYuVFgO23IZZJ99JgHzPgJr' },
+    'Álgebra Matricial': { a: 'https://drive.google.com/drive/folders/1zXCw6yxI3o6ZJOS4bir_Ggmo5LdltneV', p: 'https://drive.google.com/drive/folders/1Kuwf9mLEiwRW6LBWwvMzDszBKisn18O8', e: 'https://drive.google.com/drive/folders/1zwEHZtXGMyBqiLm5f6fCh3t98E0mneuG' },
+    'Topografía': { a: 'https://drive.google.com/drive/folders/1ZCMyiVOodcsEC4RLBzZWPohEaBfM0jkG', p: 'https://drive.google.com/drive/folders/1MS18EGlS-LxcIPApHESkRJ_u8oi76dmK', e: 'https://drive.google.com/drive/folders/1q4xuzbH-oHyIxcUS6npavQlXyppnzctr' },
+    'Edafología': { a: 'https://drive.google.com/drive/folders/1tDyFgS3Wd58bwf5pzQ4ZgL0WThN4l9EF', p: 'https://drive.google.com/drive/folders/1T5Nbc3w6ige7DEY7fvKLd1ux8TgbDr6e', e: 'https://drive.google.com/drive/folders/1FbOPd1tVBbrqJTmT2iaemp8E7JbgqY8X' },
+    'Agroclimatología': { a: 'https://drive.google.com/drive/folders/10e4d2mMrYDXP4haKPmugoSSvH_usE9L3', p: 'https://drive.google.com/drive/folders/1nV0-fVgzLG4JQ-oVbyDpjv8l6P8EelpZ', e: 'https://drive.google.com/drive/folders/1pcHjUS7KO9LV2bHbyYFtmFYll246p7si' },
+    'Química Orgánica': { a: 'https://drive.google.com/drive/folders/1JpSnnycw8TbGCLvYBv991QGqMabL3E_Y', p: 'https://drive.google.com/drive/folders/1dNRO-rwcdXfmsd1Ujbum6_dfGMtTxvju', e: 'https://drive.google.com/drive/folders/17RfB6eCkFUK1ujRjLqm0vPUMRNfUSi4d' },
+    'Sociología Rural': { a: 'https://drive.google.com/drive/folders/101aE6NNYw88fFbSuKtgDQp0eVnDG4-8H', p: 'https://drive.google.com/drive/folders/1kGzppBysON5PhYxNwwc_ea4tkB66wO_B', e: 'https://drive.google.com/drive/folders/1ntmHs17A4o84txzH231KEoai8wp5N_Zl' },
+    'Sistemática Vegetal': { a: 'https://drive.google.com/drive/folders/1ydrI44teDlPTqiDcCHPsCZp3R7pppGII', p: 'https://drive.google.com/drive/folders/1U9KbNNGgfqri3TQ99xxX8jpsb3xM-rvv', e: 'https://drive.google.com/drive/folders/19UKBHW-TCJuE-OCv8Lqh4nSOl6sIM8O7' },
+    'Ecología General': { a: 'https://drive.google.com/drive/folders/1bLoNH5i71PflUrIEW87wcBwciwBbHQsn', p: 'https://drive.google.com/drive/folders/1S_BrA3gv_26Ky160jSBSZp3anrc63l6E', e: 'https://drive.google.com/drive/folders/1iJVTwQ_BAG0cd5B3etHmezYOVCqqOw7Z' },
+    'Física General': { a: 'https://drive.google.com/drive/folders/1OAw2DxzJuUOmBjNY-G_pZBoyy6ZAiFD5', p: 'https://drive.google.com/drive/folders/1QjNU4pVny6D-1m1hNm_tWPE24dDhf_xO', e: 'https://drive.google.com/drive/folders/1qH4GQmez3qdsG9AkQ1jTkIaqDBVIUMnV' },
+    'Cálculo II': { a: 'https://drive.google.com/drive/folders/1zGlytQXA7JbFkUPHLvFBzXnHhzaueruB', p: 'https://drive.google.com/drive/folders/1lcSkb2iTwnwr8IQ_vepYC809tewyPfZk', e: 'https://drive.google.com/drive/folders/1n-ojYz-GIjppC4oMrnIGv1EEsvM4m4Wo' },
+    'Química Analítica': { a: 'https://drive.google.com/drive/folders/1NG5j4BXroB6wo54K4BE6iahsj8PZL5eQ', p: 'https://drive.google.com/drive/folders/15PZeFp3-FmXGs6X7674SzGFi1qv-DfKX', e: 'https://drive.google.com/drive/folders/17e0EtHOk249BywpP2IXCEyv8yWBjN8UJ' },
+    'Morfología y Anatomía Vegetal': { a: 'https://drive.google.com/drive/folders/1vb7q4bufxAehvCVoam8qCuntcrqMklbB', p: 'https://drive.google.com/drive/folders/137bFd8RGJqJxONMEYHGqPQiH_uL3-FoA', e: 'https://drive.google.com/drive/folders/1JuSLtKUmY_iBlSrMJHP40mHRmhhSowIb' },
+    'Dibujo Técnico': { a: 'https://drive.google.com/drive/folders/1_LS2EMHQpWwHSoXYbq8H1ZuI4CMFBCsE', p: 'https://drive.google.com/drive/folders/1G2znQciQVpyFMq-ozp_2JZ8hyULEWf4H', e: 'https://drive.google.com/drive/folders/1q10LMR5qtG4VH6g-KPen33EYesVuMrJp' },
+    'Cálculo I': { a: 'https://drive.google.com/drive/folders/1LyJx2wvkQlcMlgNwjTATVil4V0aK2oDj', p: 'https://drive.google.com/drive/folders/1VaCHfbxzeW1QttiQaLTzM9n-GljEypgu', e: 'https://drive.google.com/drive/folders/1tHHdwnNEd9RXRIfSNXfybDYiYRTbBUPa' },
+    'Anatomía y Fisiología Animal': { a: 'https://drive.google.com/drive/folders/1tsGwUWFhBrqkbidxwOqKy5WEQUc_v-Lz', p: 'https://drive.google.com/drive/folders/1JyUf2nlp92_SEU13KwqqNb6XqY4Vy74R', e: 'https://drive.google.com/drive/folders/1bJpF9LXrFuFQ1gSy_o-4Yp5nWC9tmyE6' },
+    'Química General e Inorgánica': { a: 'https://drive.google.com/drive/folders/13UZ9dKFaiCrSzFMD6dj_rIOVQEJPSQz7', p: 'https://drive.google.com/drive/folders/17HYcNZ1H3aypAGXu0UgLuQPGl9pEakzy', e: 'https://drive.google.com/drive/folders/1OJ9P9xo4-ot2WobFyuuOUlmc7eUuEJC9' },
+  };
+  // Normalizar claves: minúsculas, sin tildes, sin caracteres especiales
+  const norm = {};
+  for (const k in raw) {
+    const key = k.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9 ]/g,'').trim();
+    norm[key] = raw[k];
+  }
+  return norm;
+})();
+
+const driveLinks = {
+  agronomia: {
+    1: {a:'https://drive.google.com/drive/folders/1up0jysv_4U7QmiduMb-w7TmU6HvDdWUs',p:'https://drive.google.com/drive/folders/1Piv7YYpfxx_x4oVMT-gAuTiAzcO9YvZL',e:'https://drive.google.com/drive/folders/1wmJjUl3CalQYBGh3g1sqMkVvP-HgjP8X'},
+    2: {a:'https://drive.google.com/drive/folders/1uwTul0QgT29ghWLBKC2h0vmvjgCZTj0t',p:'https://drive.google.com/drive/folders/1kcxHL6xBxePEkZbXcc4hNf9hEPDFcROm',e:'https://drive.google.com/drive/folders/18NiCel2VExUzP3Of25y2Yjja1hzAnZxB'},
+    3: {a:'https://drive.google.com/drive/folders/1fNT2U6YleANqlK9t5ZkYGuqx6g_51kk-',p:'https://drive.google.com/drive/folders/1tKiZKgTcQ7wfKC_61hwOoZOhTH3svs-v',e:'https://drive.google.com/drive/folders/1NznKsfxO4zVeb38Z1Ch3sPCTxWxeLXvu'},
+    4: {a:'https://drive.google.com/drive/folders/1XsmJS_Bk47FeNdID91F54wd9m4mQbB5z',p:'https://drive.google.com/drive/folders/1tIT7fRidKgjvNL-o0BTLhtda8rJzEcTX',e:'https://drive.google.com/drive/folders/10leFh1B0-MEKt7CryPEX0zf7kgas4gg4'},
+    5: {a:'https://drive.google.com/drive/folders/153YXjugJ_EE5q8kqPdmR8oLxlmPNHiU1',p:'https://drive.google.com/drive/folders/15-561xkgpj2l0OPxXfPdXiZAGr8h9l_m',e:'https://drive.google.com/drive/folders/1fdZvd4iWl1opW0u2PR4_ACfhvIuQvkuQ'},
+    6: {a:'https://drive.google.com/drive/folders/1DbxyKTWKjzGjkTAqhyv5bNk36ov_TrWl',p:'https://drive.google.com/drive/folders/1uKr9HwF0ZzyeZ-ZrUSZNn1hweg28mEsX',e:'https://drive.google.com/drive/folders/1BDG_xlZu8osIsrz5vuEktftyrxjfnG3u'},
+    7: {a:'https://drive.google.com/drive/folders/1QF_Cm00jJLePSP6H4MEhg3goETWHauFf',p:'https://drive.google.com/drive/folders/1dFUBGrMLFzO4mMMxBVLP4pMGEYQAslUJ',e:'https://drive.google.com/drive/folders/1tijzFScUQQKz5qMhpCzcAEak6vHO7tXg'},
+    8: {a:'https://drive.google.com/drive/folders/1LV7i0uhcSlDLTGpvaijPhCyWWhK3hb33',p:'https://drive.google.com/drive/folders/1jg4p6H9Texk_M9OhZvc9hiRAhLoosJnA',e:'https://drive.google.com/drive/folders/18prHf-U48lsHrT0-_7-XE0SZzslEccwd'},
+    9: {a:'https://drive.google.com/drive/folders/1knVrFvcBsqjectHm7nxAMfEQz-XSC4ae',p:'https://drive.google.com/drive/folders/18htKRG8FTJHHs-g88XB2X64iQeboSDTE',e:'https://drive.google.com/drive/folders/1gGBBz6IQ8F5kYb94ZPsdHCe7ddNokBx_'},
+    10: {a:'https://drive.google.com/drive/folders/1j-m-bsny4l3oA6QBZS_BoH2L_k-La4tj',p:'https://drive.google.com/drive/folders/17I3ge0vLdN73bYt3VWDZbgn2v0L0Wih8',e:'https://drive.google.com/drive/folders/1OQJHhmh-BjuyX0DKKoC1wms8LqNhVe3h'},
+    11: {a:'https://drive.google.com/drive/folders/1Q8pSbFhIlPOQ3xzgSiYRFjWpee3GwQh_',p:'https://drive.google.com/drive/folders/1gscvmHQgWc8exHRvti3veP094WA5huE0',e:'https://drive.google.com/drive/folders/1y6CsKdH3INEpSE9LCDw377K1eAvQ_k1n'},
+    12: {a:'https://drive.google.com/drive/folders/1ZRowxyqP866yTgrYppYS763QSbA_3_4X',p:'https://drive.google.com/drive/folders/1RweO6m85eRUIToA9kItZo4OjA0Vgvjq2',e:'https://drive.google.com/drive/folders/1OBMmcyLcLDFONAfVOg6mY92DhxcffEqi'},
+    13: {a:'https://drive.google.com/drive/folders/1V4q20VknKBoIafaIWTT6ri1DP_wasPOL',p:'https://drive.google.com/drive/folders/1oB-3r6gVAoBe7ZrxN2Gv19VkZ4_A8l4r',e:'https://drive.google.com/drive/folders/1UkUAgDZXBZ72Bn3TgyWd2ksPhvMiti9X'},
+    14: {a:'https://drive.google.com/drive/folders/1Z0IODGZeG51icWXfrCMqQ7yLhW_hga9E',p:'https://drive.google.com/drive/folders/1j6qo80Ug6BzCf7rsvgYDw5XtVvZEHzNE',e:'https://drive.google.com/drive/folders/1KAZcR3u_QoAzn7jS4nmWVs-RAj4R3JUK'},
+    15: {a:'https://drive.google.com/drive/folders/1EG9kLYh-BUSja9Y3DXpRrOmb43tCUJWO',p:'https://drive.google.com/drive/folders/19AJkBzn0KykA5CZA4T7YGRIov5satkGF',e:'https://drive.google.com/drive/folders/1-U-5LunYTi0QNakoW-pJF0YQtGh7EOlq'},
+    16: {a:'https://drive.google.com/drive/folders/10ljxM6lG3gjvTKGwVOvZLwh08GjvTX0G',p:'https://drive.google.com/drive/folders/18RG22oT_t0-wi8oBsf7eJQWHi9c5ric9',e:'https://drive.google.com/drive/folders/1DTs6Rguh4LE-kIVRoOh0kYK8x1Eb5CCZ'},
+    17: {a:'https://drive.google.com/drive/folders/1TJJHw6o2AD3rV1b2qgt6hvzTXmQyy5P_',p:'https://drive.google.com/drive/folders/1G3dxFJDYjDK_vqfmdGO3bP8aGubPxCiO',e:'https://drive.google.com/drive/folders/1cs-mb60yfZgRaWkK_62NSXUy_TdVTHqf'},
+    18: {a:'https://drive.google.com/drive/folders/1H5VYwLmFcIyh8EwjdodQs46YjH9_-Qjx',p:'https://drive.google.com/drive/folders/1Xsl9fRY81kbXbF_vCxwdpwuANt3WlcHw',e:'https://drive.google.com/drive/folders/1befc-jlBg5kO5jenDyzWI0H6sE_y_t23'},
+    19: {a:'https://drive.google.com/drive/folders/1sKGu4mH6Hm1IrIKVq-wffncnFpAtPWew',p:'https://drive.google.com/drive/folders/1FL8wR0yRptDMa_AtaH_DLiHpLAlG7GZm',e:'https://drive.google.com/drive/folders/1fSqjc6Z_VUc2De574PjZkYmW8iUR-obo'},
+    20: {a:'https://drive.google.com/drive/folders/1Ocr1lOuRbFWKDPbF4JHMlf21_sOdVg7Q',p:'https://drive.google.com/drive/folders/1vEZn3u0WlZJ-4dD_lgCVzewZChTjo4gp',e:'https://drive.google.com/drive/folders/13-RTRcSoDD2IHwXbu1DhZc71mJL-uFKD'},
+    21: {a:'https://drive.google.com/drive/folders/1SUlf48TF9DJJTHppP5xyWQ0fVPGdrPlZ',p:'https://drive.google.com/drive/folders/1gYCyt53NEWbwkTUKOd3x-qhYvNyVydIx',e:'https://drive.google.com/drive/folders/10b_5P_tPdkIWZZOrcfkO7UpyEYCBrgQt'},
+    22: {a:'https://drive.google.com/drive/folders/1GUVNn27hGHRrgdVh-LXzQVxFEZ2j333c',p:'https://drive.google.com/drive/folders/14k1qirXh-_whXSAhITmMOw4dJbV9jYrR',e:'https://drive.google.com/drive/folders/19sCF2-nSpx696YcPG-QhWsEf4_gLrE0C'},
+    23: {a:'https://drive.google.com/drive/folders/10KeO4EQhTXE_lvKxol9HnMeNAxv4aob5',p:'https://drive.google.com/drive/folders/1q0JzbXDXPEp1CX9AP7ZPDT5nRfjykeuv',e:'https://drive.google.com/drive/folders/1T9WuYbOBe_s_ccqIoCWG54BGRJiozO3a'},
+    24: {a:'https://drive.google.com/drive/folders/1S_f4hpLy_eGk6yBvDfwkGLmBNCjjwlmE',p:'https://drive.google.com/drive/folders/1r8XxoVmLU9anOmAXYlk1tSuBjKFMT3fJ',e:'https://drive.google.com/drive/folders/1UPsR7LEyWWk9xjo7hksAiHoEUE9iMCkX'},
+    25: {a:'https://drive.google.com/drive/folders/1-6KrXd_3bkwir7FT7ScGUDsA466oBzor',p:'https://drive.google.com/drive/folders/1iGTDZesQFrsFAU6g8pY5qAgJSvKNx8st',e:'https://drive.google.com/drive/folders/1dNc9T9vpDUulhTo_pC3PwJRhyamn68QZ'},
+    26: {a:'https://drive.google.com/drive/folders/1Yi1zmiA0YuwxmvWxpZkHQDwn2xaRLVuc',p:'https://drive.google.com/drive/folders/1QKNWxJrOTeWL7WvKpQW67B29JJBTh82I',e:'https://drive.google.com/drive/folders/19RuslHSyhOoZTaDTytzJ3MagYWRU5xlR'},
+    27: {a:'https://drive.google.com/drive/folders/1jBP2sqcc35_7HJ8KJhZh8Q-kWwDW_JNb',p:'https://drive.google.com/drive/folders/1KiD4P6v7OjxY2qPHZDfvjL-yq3uHbmFO',e:'https://drive.google.com/drive/folders/1yS-xP8RmwF_7vsojZ6Gh8ZSWDDQI69V0'},
+    28: {a:'https://drive.google.com/drive/folders/17RwFc-6emj7365OP6P1kto66qZT65rnW',p:'https://drive.google.com/drive/folders/1JlBljxMSi8YBEegJYBSoddt4ns5aV6vc',e:'https://drive.google.com/drive/folders/1bCxEmNY1jCm_OuU2-Nyc3GBUL1jozk6X'},
+    29: {a:'https://drive.google.com/drive/folders/1ccYYmUcqVs6SQXHNkaG6DulkvycLUi12',p:'https://drive.google.com/drive/folders/1UikQGNA4c5xXZNpsZCrVAc93pgrLxH1t',e:'https://drive.google.com/drive/folders/1je-bWqozGT4bhcDMDkwHNJdsI3vOKHRt'},
+    30: {a:'https://drive.google.com/drive/folders/1PyGx9SI25SuB7ngSwQfquu72smfm8c9w',p:'https://drive.google.com/drive/folders/1IMYipyAU4t_ehISps7TrBJUT1Mw9cb1n',e:'https://drive.google.com/drive/folders/1X0nPMqVfIT3jM1WY6LAcOIL2ApbCQxXy'},
+    31: {a:'https://drive.google.com/drive/folders/1F-2sUVWNCy1Hm21Rcs5Z3nkJ1_TKGJzo',p:'https://drive.google.com/drive/folders/1qXkicbnL2u3g8oQcmVav0zFXSSyitcNG',e:'https://drive.google.com/drive/folders/1mjtWK8pA-1PwJshdiT5tIG7fJC1Xo8JR'},
+    32: {a:'https://drive.google.com/drive/folders/1MaLvwfnQhkJmgdG25Il5GCnsPHxS4YlS',p:'https://drive.google.com/drive/folders/1KLjoshzH_GoXJPFy2M7WpiodN37m92dz',e:'https://drive.google.com/drive/folders/1YKv12A_8YLtBTuD7r9aRneTpl21JUeMp'},
+    33: {a:'https://drive.google.com/drive/folders/16E1nDFw-LmpsSjth8aBLGUbHZQPGNJtc',p:'https://drive.google.com/drive/folders/1KiphqjNC1nPSeRMbP8tgqpotJH7dZTaP',e:'https://drive.google.com/drive/folders/189yAyMFboWuLOgI36yAxdGqOJBARxD-j'},
+    34: {a:'https://drive.google.com/drive/folders/1XihWZxrWXV_XYidVaD429cQpSDVYp3F3',p:'https://drive.google.com/drive/folders/1UyFGhVofVHj2fixl0lUQtSIPQQpVi_Qf',e:'https://drive.google.com/drive/folders/1MbfWM6N65EL_HBx2k8WcyQXFmUW-Kib6'},
+    35: {a:'https://drive.google.com/drive/folders/1Wu7vFs2Pt9bY8Zqsf1Liey5fPko00dOz',p:'https://drive.google.com/drive/folders/1TA33v6bZe3lPgj-WJzzX5YYgUDLfsyjd',e:'https://drive.google.com/drive/folders/19eMINDDuE57r_2HYT2XhqkFgkf3okqDj'},
+    36: {a:'https://drive.google.com/drive/folders/1MtuHQntmlVcn4xc-DU279BjG070VEUGg',p:'https://drive.google.com/drive/folders/1EPkKkQnMY1gW3LGnk7sAzLuuCpd20m-I',e:'https://drive.google.com/drive/folders/15uQGcnlWUrdyCBK8_YNVMfq60rxDvTKu'},
+    37: {a:'https://drive.google.com/drive/folders/1ReMbI1MW_-T6f-1lki2ZUayXP5A4zc5j',p:'https://drive.google.com/drive/folders/1em44HbazcQ7plYYywjpTrMQhcDVB_4m8',e:'https://drive.google.com/drive/folders/1DWgxqCuEii28nntKFV7bEAN_ruuow8l6'},
+    38: {a:'https://drive.google.com/drive/folders/1bjGU-x74GzqXAkdPMELiEf7KGdm0Ot34',p:'https://drive.google.com/drive/folders/16rMmCqaF2cdJCWW7kwYfLSwkXgZmOSu2',e:'https://drive.google.com/drive/folders/1xXfG0yr32rVKXGRyHDzwbwZLsQ2Jf7Mq'},
+    39: {a:'https://drive.google.com/drive/folders/15hAKjuxcdWv9TwSSwyibiC2NSsQF4hoa',p:'https://drive.google.com/drive/folders/1VOBMoPfw427kQ_2KSlCgXXIah81O742Q',e:'https://drive.google.com/drive/folders/1y7TY0pJ3AaStPRlD-xTxnu8eP5M6nl64'},
+    40: {a:'https://drive.google.com/drive/folders/1bjeCDXlnjdAyXKMklVNvqUeqndvX4eZr',p:'https://drive.google.com/drive/folders/1miQsWXygHJmPnRPeWMFbhQ7wRgOoTPaK',e:'https://drive.google.com/drive/folders/1-xZB66OlHV93ITlycm_1aZqObUmhrEeP'},
+    41: {a:'https://drive.google.com/drive/folders/1NSsxAuteXANuLli9lW9BYF1wSmHKbRXK',p:'https://drive.google.com/drive/folders/1GUPAnbxI4MjoSDvG6MYwobNMJWYKHQJO',e:'https://drive.google.com/drive/folders/14En-P250NsQa5nDf5fcTUpinzR18c2k_'},
+    42: {a:'https://drive.google.com/drive/folders/1cWyr9ZgGZgZ-FPGPWyG0hQ9RZuMyRTRa',p:'https://drive.google.com/drive/folders/1w-LOjVTpbK-hl-AkkOm2AaruF7YEfRP4',e:'https://drive.google.com/drive/folders/1LJQQ_mGBgCfKDmXAXuMG84qjVEwgkJax'},
+    43: {a:'https://drive.google.com/drive/folders/1tkeZ2fekkr2yNwUDCF-txEA6lQyBhdPt',p:'https://drive.google.com/drive/folders/1ftgWvIWMWH_n_voVcKBWwMvsuf0dR3Ye',e:'https://drive.google.com/drive/folders/1gmvZVh_94kROxK88TBDVmkb6o3UHYw--'},
+    44: {a:'https://drive.google.com/drive/folders/1BAh04gYlTihrjWjETsBdyCPSlT3Wq0mh',p:'https://drive.google.com/drive/folders/1KWcdgy5AjKe6tmWhP_j1Cq_pWJSKfakU',e:'https://drive.google.com/drive/folders/15oLMibweOuj4mBjWe6JXA_ZTYxNEWGVH'},
+    45: {a:'https://drive.google.com/drive/folders/1y24hnAP44jbtAMs88wpFXi02mOqZg73W',p:'https://drive.google.com/drive/folders/1gEp7hF_BYbdqog2ilg-Zhe4QHlFPpMvY',e:'https://drive.google.com/drive/folders/1jvHDG5-NXsAmUVjfPFfhJge99vVeDJwn'},
+    46: {a:'https://drive.google.com/drive/folders/1WaTiJevexjuOOMwjCe9p0qZtkXDR1Kn5',p:'https://drive.google.com/drive/folders/1k5YXBOs8SIQi9uuur5LnH1W4CeaQUKhQ',e:'https://drive.google.com/drive/folders/1Z_HztmzTIDSO57x31WPw0W1puEW_rvw2'},
+    47: {a:'https://drive.google.com/drive/folders/1J0lndMjdd6ugZe6PaGsqyi2Drn7VqbFi',p:'https://drive.google.com/drive/folders/17eEE9zDcXscH3qYlQxtLamgkKOTmro2C',e:'https://drive.google.com/drive/folders/1eSQNRKJKRPzC6l6oMODiWE2JfOnQRQY0'},
+    48: {a:'https://drive.google.com/drive/folders/1x9EZNz6thAa9ET-wAugbsD2lTrGVs7y6',p:'https://drive.google.com/drive/folders/1zi-qdzbl5NXu_SbWYPt0oGQNyDqb6zIO',e:'https://drive.google.com/drive/folders/1_ch515YVJHa0-Z6uqhuGTqM6Ch8MMQfj'},
+    49: {a:'https://drive.google.com/drive/folders/1IKGax5RrMJYKNs90ZKoYFnp_8AjO4z50',p:'https://drive.google.com/drive/folders/1cQP-bNGpzTljiPrmnpASQHDgHlovkOEj',e:'https://drive.google.com/drive/folders/1T28XCCXK7cp4kfhrKpMoCUqengnO_5Nf'},
+    50: {a:'https://drive.google.com/drive/folders/1boU0bbYzhyR5-HYV4OEJBl_G7c9E2JKb',p:'https://drive.google.com/drive/folders/1-jR_Fbx88uG5O_WyDTQG9XpfAfze535B',e:'https://drive.google.com/drive/folders/1e-3HGm6LZutR28QAgMmfMc4h3cGjuJh8'},
+  },
+  agroindustrial: {
+    1: {a:'https://drive.google.com/drive/folders/13qXkiAcGRPSkhCCtUC3dLDXlUnuc3S8I',p:'https://drive.google.com/drive/folders/1jfrpW_h1T-46A9tYl48bhYhsna6ZmEIJ',e:'https://drive.google.com/drive/folders/1e7GV03QRW288fHsrm4okrtibGeWDltRU'},
+    2: {a:'https://drive.google.com/drive/folders/1S8oYL2gMaOjyShRCAGNj5gR0BjGKxaLZ',p:'https://drive.google.com/drive/folders/1T39_i5nu0k1f7mYeWlG4SviNkjFgdpNY',e:'https://drive.google.com/drive/folders/1XVofYRABBQ-yHd7_tBzYrmap5KUn7HOr'},
+    3: {a:'https://drive.google.com/drive/folders/1idKqCGk8zeHhMdsz8ouXu6WvhjQPWrNO',p:'https://drive.google.com/drive/folders/1IfBXOUiM3XPaXFHU7nUMx8q3iY_0Fvcn',e:'https://drive.google.com/drive/folders/1SKoKR0k8MQU28qqib0wAHtnsYZeyRhZr'},
+    4: {a:'https://drive.google.com/drive/folders/1whh8jCnFKPUzRurnRCBX_8PpggBUzLmT',p:'https://drive.google.com/drive/folders/1C12ZCSYJpJUg6U-mGryw-bemWYIAv15M',e:'https://drive.google.com/drive/folders/1BVuPKwZIo8gPhlFZfsyA4DPwHL7ZI84e'},
+    5: {a:'https://drive.google.com/drive/folders/1gPN8o_iZO7R42AHjEYF-7621b25B1nty',p:'https://drive.google.com/drive/folders/1yNPm1g8EaGkOv2gIK9DzzgsqzZUzmh5P',e:'https://drive.google.com/drive/folders/1g4df6LzKmc7RuvU0JlxogVwPljQ2gwt_'},
+    6: {a:'https://drive.google.com/drive/folders/1d03zhoSpDMepl6g_oe3pzqZr-HXjgXUr',p:'https://drive.google.com/drive/folders/10_qWXlY_62gplPluH1bx2kqBijgsYgop',e:'https://drive.google.com/drive/folders/1gFmzCJD9tq_MooRUUMc-9zRrzgutofSR'},
+    7: {a:'https://drive.google.com/drive/folders/18OYmn9LozwxUvpIJGtiJt4P3uUsgKmlD',p:'https://drive.google.com/drive/folders/1rnbDohLUiKN-UhhCYMHEjpVfFVWE1_Xy',e:'https://drive.google.com/drive/folders/1pn76g8mjklBRsEiw-IPMfhze-pQM2r9t'},
+    8: {a:'https://drive.google.com/drive/folders/1hM1qzbcizTl-I5s-MGIUB9fUzx2qVE8X',p:'https://drive.google.com/drive/folders/1LFsR6RFhezLvh9e2ZnjRHvCxPqE70sHH',e:'https://drive.google.com/drive/folders/1tn79443nrd_XqLpYRVvAbwUiSFo53I3h'},
+    9: {a:'https://drive.google.com/drive/folders/1w1um9RBDSBcp_8sgSutS0mMrEsLXwyU6',p:'https://drive.google.com/drive/folders/1wVxFIcExWr-SqtOFpmj2NK_u4WpZqZ-w',e:'https://drive.google.com/drive/folders/1pkvbQ_6gxmtLifuZfbyNEsFAD_ugBIPA'},
+    10: {a:'https://drive.google.com/drive/folders/1-R2ZIZk5hwtHBRw-dKRVu5CTqM5pUsel',p:'https://drive.google.com/drive/folders/1Yl8aqugTSfX7yOWrWBaJlwovUkwFqjgH',e:'https://drive.google.com/drive/folders/1SF_VdxAX_DcJ9yOOKvE4vkzBQQAr0Vip'},
+    11: {a:'https://drive.google.com/drive/folders/1Z-hynmc-SCL3BfPsdCpozvdO6G-7odSy',p:'https://drive.google.com/drive/folders/11hKariiqzTCF-paADjrAR0nYhswGKtt4',e:'https://drive.google.com/drive/folders/1ENIlyU_XbmYCI_NfONyAHBYVyXv6FVhp'},
+    12: {a:'https://drive.google.com/drive/folders/1KPXWY6705BX_IO4C1jzhyXtFEgd5aQ4a',p:'https://drive.google.com/drive/folders/1_cgELztPiJm3QxxVX7Ongd0NfEfyo5Mf',e:'https://drive.google.com/drive/folders/1NqjRuhDeB8hYoKhogyjsr5fkC8Y7ciEb'},
+    13: {a:'https://drive.google.com/drive/folders/1kYKqhTKdDgacUXZJkX6OR4iQ3M0tFOyn',p:'https://drive.google.com/drive/folders/15_zKif9MGEwhvb5diOGgvzyuCebF2qGN',e:'https://drive.google.com/drive/folders/1F9bZhpdYSFK-wiBeH6gEAUtjtJXBIaIZ'},
+    14: {a:'https://drive.google.com/drive/folders/1Zn0XMruniihWXEn9TBrdeSSSz4_rXdNV',p:'https://drive.google.com/drive/folders/1ffKkIs64rvb8f0Sszn9PPwwCLkb2VsMY',e:'https://drive.google.com/drive/folders/1EhSpACNB17jY3xwWw-4E7wGuU3INBQWM'},
+    15: {a:'https://drive.google.com/drive/folders/1174cEQ1RCiw6uBfdmSBTKG-CmaiPVhlE',p:'https://drive.google.com/drive/folders/1lIx6ef2mdK4V4bEZ3UvgHo9OvWP6wqtp',e:'https://drive.google.com/drive/folders/11B0wtkni4TGpApmqUXO06hegLd6KY6jW'},
+    16: {a:'https://drive.google.com/drive/folders/1Av8Fs9x6-DEkQWQzEyb4pZQF58tgaBpS',p:'https://drive.google.com/drive/folders/1BLmAr32LiqupyId6hRkp5a0ylTlAKoFh',e:'https://drive.google.com/drive/folders/1zYKo6otF9oLPjeWLCfEyr312hMdhfx12'},
+    17: {a:'https://drive.google.com/drive/folders/1H7Hi94NxrodY1QsRHwHEOPvYtdEfznIn',p:'https://drive.google.com/drive/folders/1ZxWqTiRvBZdoCAgMsAfPsJqj_8KUfKsC',e:'https://drive.google.com/drive/folders/1GSIbJ0Y77FtdHryEc2TtJ7y-ZeUm4rNS'},
+    18: {a:'https://drive.google.com/drive/folders/1qrRPC0tLEnj4tF55LjNsP9GYZoE-w6eX',p:'https://drive.google.com/drive/folders/1rKKwX9ugs0QcKEUBus7dOwxjEHOCCtbL',e:'https://drive.google.com/drive/folders/10-kNnH5Ib7aROzRt9uxz0iw9B21uiACO'},
+    19: {a:'https://drive.google.com/drive/folders/10DqCvSo4yHaXcGyaoMGdrNk0oOPIMhug',p:'https://drive.google.com/drive/folders/1whHG0hB1VyJBwC4d5n8TU6MTJW24gARH',e:'https://drive.google.com/drive/folders/1szwn1GVzN2zwHIGpe9XpInnNl2FRCJxN'},
+    20: {a:'https://drive.google.com/drive/folders/1JF_BH1h-qDwtmoaKRZlNCTUuscrvyspI',p:'https://drive.google.com/drive/folders/1gMEXvdtZmvzZgYo4Co3ebBdv0WklBkyi',e:'https://drive.google.com/drive/folders/1l99vfAdq5ml4vNzQJsItgc5MAl86YsXm'},
+    21: {a:'https://drive.google.com/drive/folders/1ceTeb2PkJffwrdAix8BgjZnGcoqZLWJR',p:'https://drive.google.com/drive/folders/1tG8XxwlBKJGmYgrIWq4UVAUolkw5wSBp',e:'https://drive.google.com/drive/folders/1_EssRkg4v1WSvIdfA_EMubw3gE7kvdc9'},
+    22: {a:'https://drive.google.com/drive/folders/1BdxkQe6Ese_Q4S5J2LYmsa_sK1R0djvQ',p:'https://drive.google.com/drive/folders/1JLo1FIdUM8aVaT0_fk1974u6RVMIit04',e:'https://drive.google.com/drive/folders/1XsH1aWHqCyp3IWk3LZJ9HunKbXXGBUrg'},
+    23: {a:'https://drive.google.com/drive/folders/1MKeerfbNK9kbvQfjfhcIw_BzWNIEm1fc',p:'https://drive.google.com/drive/folders/1GqXQiASYNNL0dhx8LFCt06xvy7KL0O5T',e:'https://drive.google.com/drive/folders/1ekxaqBk0ztKxauhDmssfI5RMI5_teXu2'},
+    24: {a:'https://drive.google.com/drive/folders/1MhrYtrxuViCMySQZqC6utbBSsw62ese2',p:'https://drive.google.com/drive/folders/1g_w4JfW6ROXXw6Slh_CeKKRA56hivfmX',e:'https://drive.google.com/drive/folders/14lNsksOkD4Fw4TBXS4IY4Z9B2oagaTYs'},
+    25: {a:'https://drive.google.com/drive/folders/1vobmP8GykyGX9zFhLIE6l-Cycgp3r_Pd',p:'https://drive.google.com/drive/folders/1HjVRIKVaN2TIMsqfq_mfW7g6w1Bhvu-m',e:'https://drive.google.com/drive/folders/1fEBc2vk60dd2JufWvmYViU1UE0iEFtqB'},
+    26: {a:'https://drive.google.com/drive/folders/1uqUj-F5tIhWnoE2NN2FDooeUVMn2nmdK',p:'https://drive.google.com/drive/folders/1S9N0LBwyV-6pafYmTwQuRIon3uuLdeuk',e:'https://drive.google.com/drive/folders/1alLGlXOIvobMwbrTUDj3Lg8DlQBLleXF'},
+    27: {a:'https://drive.google.com/drive/folders/1MwvDncYFRsG9Ny2dJf6x7PkFx8Uch1oM',p:'https://drive.google.com/drive/folders/1xVcONrYHjOrrAspuhZDiNt0-UjGoS8EP',e:'https://drive.google.com/drive/folders/16QKOJVprKh_6-2S4ij_OoksWU1O3UQ5Y'},
+    28: {a:'https://drive.google.com/drive/folders/1So1BcAyeTfyw9Ldh4WnGoXFKlU6Vb3q9',p:'https://drive.google.com/drive/folders/16n79uEDc9-OR3ATzchnMIXvqMG_WdtXA',e:'https://drive.google.com/drive/folders/1cw6XLuhw4PbX_LMp9U_IWHitqyCT7fJM'},
+    29: {a:'https://drive.google.com/drive/folders/1qZY4EE98aR4PoxYefVwtBGXWSpPXJ5fk',p:'https://drive.google.com/drive/folders/1rFe53f2c7c9Of1qt0GB_H3xGuUj8cdch',e:'https://drive.google.com/drive/folders/1kw9As_wKhDkMr292iaf_OhJw66O0DRcE'},
+    30: {a:'https://drive.google.com/drive/folders/1I2KhSl1OpE7wr_t0_Wo4_pfUPAjqzQwi',p:'https://drive.google.com/drive/folders/1eMLJGBcZqxPxoJJ1xT8_9TQjE_DMqker',e:'https://drive.google.com/drive/folders/1ANcdchnwEhPRvFcjcNceJAHM0yHxAtBl'},
+    31: {a:'https://drive.google.com/drive/folders/1yESigR8gZdOwy_UA_xubIrMWGbNmEYtc',p:'https://drive.google.com/drive/folders/1oWu91qD6sE_VDMT8_8_3UZxfw36D5U84',e:'https://drive.google.com/drive/folders/1AB4J03XxgtDeOU4iqwXNK6eOP5ze78DT'},
+    32: {a:'https://drive.google.com/drive/folders/1antK0gx5uRlGk1pCbEKrugR7DjL9mYAw',p:'https://drive.google.com/drive/folders/1x9APMqhLZ6m6v0cWTkNOwCZvpCkghrG0',e:'https://drive.google.com/drive/folders/1EZfyzbnG6ioosnVE5dvxkdAa7bWo8Bb2'},
+    33: {a:'https://drive.google.com/drive/folders/1xBEQmMuYvY-KbDcQiGqPA37nOkaiw-2L',p:'https://drive.google.com/drive/folders/1gkzVaq8mwHk_BdRb7tAYDDvhpVrj-4qP',e:'https://drive.google.com/drive/folders/1qQ3HehQZslac8Hy7aJf2xavcQ19Knvzb'},
+    34: {a:'https://drive.google.com/drive/folders/19EMW3zRo2gXVv1SOpq5zVUwjwYakQuah',p:'https://drive.google.com/drive/folders/1x3rh1lp0jBpR0GlzLujBLpgzIuH9OnSr',e:'https://drive.google.com/drive/folders/1-zxSTcck10k9ra-gf6MkMzuqKOE-kHUq'},
+    35: {a:'https://drive.google.com/drive/folders/1mCvs3quG3Ogdi-r_rNdwoRl3WKssiYRA',p:'https://drive.google.com/drive/folders/1pcUe9ohKMCe9nLrK6lfXVWfo6czCqvi4',e:'https://drive.google.com/drive/folders/1mlZYBuLtC6-llBRUHe2Lg7cMdMzCqhSe'},
+    36: {a:'https://drive.google.com/drive/folders/19zVkhGhihjuZ_syXcPPze1jdieRe496X',p:'https://drive.google.com/drive/folders/1mQxu6TV7q8M5IHRvzI8HkkxXbcu5EM-j',e:'https://drive.google.com/drive/folders/1G6-oLkAmzak3oNcuJgdBAExo2-_nA7xM'},
+    37: {a:'https://drive.google.com/drive/folders/1PHWtTW-t8zrIJra5VMXuEjw6XmCAAiAp',p:'https://drive.google.com/drive/folders/12-7EACO0rLO-_FIx2y-i_8-t3Lc9KvHc',e:'https://drive.google.com/drive/folders/1zdO5-rBQS3EvJolGnSP1jlo33hlcae62'},
+    38: {a:'https://drive.google.com/drive/folders/1pbpH32UJJ_JGW_Y8K4QIYhzKD1PolKX9',p:'https://drive.google.com/drive/folders/1Z308Zp83_Iy876UNlvpPJYSuuuIDc--7',e:'https://drive.google.com/drive/folders/1ea84dfFu7_6OhwlpYOjGGIhjJGMJWmqS'},
+    39: {a:'https://drive.google.com/drive/folders/1YNfD77d0ux9JIeY6PeWtdayKgZRFM2Z6',p:'https://drive.google.com/drive/folders/1WBg8OZZ-T_nafooCNJcSRIcYCvC2e1Fw',e:'https://drive.google.com/drive/folders/1ViyqPjy-9Vs3b2kanGt3Mt-mgghoLO69'},
+    40: {a:'https://drive.google.com/drive/folders/1b4GF6tdUfS2a5rysy4g42M7A7ntg4ilv',p:'https://drive.google.com/drive/folders/1-I1V6ive7PUMO3a7Hk5L7rPlqTRoUoge',e:'https://drive.google.com/drive/folders/1PgA-0PY-EYm8iTSH57XUwjylYSxEF7th'},
+    41: {a:'https://drive.google.com/drive/folders/1EV0eBxdhUlN0LliBlCmM_V3-BjrVkGjY',p:'https://drive.google.com/drive/folders/1c6lTknA1gc63wDPuOzRnHPXt680p0WVM',e:'https://drive.google.com/drive/folders/1LlVuhZq16DuWQ7vR1wkJ41iAGPpztBmc'},
+    42: {a:'https://drive.google.com/drive/folders/1RZajwK-DUayJwkJ-_C-YSQ1eAsNPYxj1',p:'https://drive.google.com/drive/folders/1I00dLa46tgKMSF37M9p-7ggE2jSH4SA-',e:'https://drive.google.com/drive/folders/1I23CSJF8Xam5Ox0bv0dcPjri7f-JxmLY'},
+    43: {a:'https://drive.google.com/drive/folders/1kxHZzixnS1v8tYr4_00Cc3f8eyCOOKQK',p:'https://drive.google.com/drive/folders/13XVx0cqFtc3J4OiJmYGB9RgDQahvGTSE',e:'https://drive.google.com/drive/folders/1Xbac1EMHyCR-Q2egde6gFactfbp3VVow'},
+    44: {a:'https://drive.google.com/drive/folders/1VYwoDXqyAqqw44mTyx4xRirfgFuGHA_X',p:'https://drive.google.com/drive/folders/1JcVYL0FoPwOTKI5sO5iD_xWmWFqOTG22',e:'https://drive.google.com/drive/folders/1Tj_dXEy3WinQuxq9yzXDxDKnUhBl54Cx'},
+    45: {a:'https://drive.google.com/drive/folders/18ZKJwZnj9wVRbyGJgwu6aZZalfQw64Gt',p:'https://drive.google.com/drive/folders/1DXftDUq9BKUlzxkbLkeWwikDMlCkk6QC',e:'https://drive.google.com/drive/folders/1zGhP58RdvGvHKcWZh33-mOFUKiTFxAsh'},
+    46: {a:'https://drive.google.com/drive/folders/17PkJn5DYpvNF3qcYHn_izLOTsSpUaCc4',p:'https://drive.google.com/drive/folders/1cNv6zGD1AIlKMZJR1d2Hz7lprrIAGRbS',e:'https://drive.google.com/drive/folders/1fP4o5FBU-du2LTNyr6WFuIwRxLkGf5za'},
+    47: {a:'https://drive.google.com/drive/folders/1cng1lOrMzjLHbBzrAQwM3u67Zy9QPzxe',p:'https://drive.google.com/drive/folders/174fVAIr1k72Ljijnl6w5YhBhZb17oMXW',e:'https://drive.google.com/drive/folders/1uRMuueQFDLzxOwsNbviB8WnV_Ek1INKI'},
+    48: {a:'https://drive.google.com/drive/folders/1GHOTVWAmoHOaPcdKE0eQTIveRFMwU4L6',p:'https://drive.google.com/drive/folders/1AZGtoio11fXI7uyun43tbDbJXE4Od4le',e:'https://drive.google.com/drive/folders/13WZCpG_wL4yzKoJe4mxz21McoE_axSdc'},
+    49: {a:'https://drive.google.com/drive/folders/1ueVJ9p1GOogoU8olQvfzbvDWXS-XGvf8',p:'https://drive.google.com/drive/folders/1r_1o7aPv7327f2jGTsbLQNh2a0r-oaAQ',e:'https://drive.google.com/drive/folders/1t22gET8YfnVR0NXA0zDhzipxCys5_c1P'},
+  },
+  agricola: {
+    1: {a:'https://drive.google.com/drive/folders/1T8k6JcYDwOd-r-9t8drbJvB0Bu5zp4mM',p:'https://drive.google.com/drive/folders/1WUvxNLrvQTcbj5g6th9qPudTlfoZIEeo',e:'https://drive.google.com/drive/folders/11UWKIUOMukw-6t-VxO0ImZaLun0sSa7O'},
+    2: {a:'https://drive.google.com/drive/folders/1UYYQb1BcmjGPrUDM0D3cJd-EnZfwdGer',p:'https://drive.google.com/drive/folders/1DoWgvouR3piDXXqjnRxVmDH-dIQsaBam',e:'https://drive.google.com/drive/folders/1iDOJk7Oi628c2H4sHtP56arSiY9-6iaT'},
+    3: {a:'https://drive.google.com/drive/folders/1T79eDuq8HQOF5sijsV8-K92THBFmf7qG',p:'https://drive.google.com/drive/folders/15CTee0ANGGuTCF8aaYVMI9HcD8qghYYz',e:'https://drive.google.com/drive/folders/1eaRjPrzmlKAqsqL7fl1CYgL-YF6WjvG7'},
+    4: {a:'https://drive.google.com/drive/folders/1URoRcQeaVCdXUt-FOd5QiCXwWQaOXEA9',p:'https://drive.google.com/drive/folders/1rBmDiLmCVALvbDaWxQ0CAJqnXdZrFsCo',e:'https://drive.google.com/drive/folders/10PbjlweV4NQjztHAiGqfz2ZzVEtyfog1'},
+    5: {a:'https://drive.google.com/drive/folders/1i86B2yuCMvcLnh9HvTD_pVbg0ANjfYLQ',p:'https://drive.google.com/drive/folders/1q5mRQ2kot9mqryF7Cg3a4Rc0RX3jVSw3',e:'https://drive.google.com/drive/folders/1fsXt5JS_xgjnucZdMocfxKLQshEzj3Mg'},
+    6: {a:'https://drive.google.com/drive/folders/1DmrwlGJhZ3lnZ_W6qA713VitO33jQRYn',p:'https://drive.google.com/drive/folders/1PBcFXMmylmxqAPX235NjCX-dnthz4uxG',e:'https://drive.google.com/drive/folders/19EelyXGgH0MsnMtH0pZ0NBB7XGhxDZUJ'},
+    7: {a:'https://drive.google.com/drive/folders/1HTpp6dJNBO6hugRzSgpozqcDz6ihNNlP',p:'https://drive.google.com/drive/folders/1thS8bVEzXaWxUdyRo192dEP9xtOyON8k',e:'https://drive.google.com/drive/folders/1MCRGroaLNMXxJWWT1MRF79nBBU2Y5taf'},
+    8: {a:'https://drive.google.com/drive/folders/1_TEZ9GPK2BCc4U7n69IwqNWBKu7-_oEm',p:'https://drive.google.com/drive/folders/1KQqiFa9FEfqLLzv9QSzmq0FwkAgZKl3R',e:'https://drive.google.com/drive/folders/1n_nC7OD8fVJjYPatyT7WE-JllB5ziSu0'},
+    9: {a:'https://drive.google.com/drive/folders/1wuaG6D1ay8vWVbKHImo8PNsFQmrsBDdh',p:'https://drive.google.com/drive/folders/1fe6AOJIQ3XsvOrz9wkfAVZyr9ID1VHdk',e:'https://drive.google.com/drive/folders/11s8SbeovICDVZ-CgqcB4FxgJiKinPwFQ'},
+    10: {a:'https://drive.google.com/drive/folders/1MtlGzLtx3yl83SyDWdsE0wyYV47qSutu',p:'https://drive.google.com/drive/folders/1GRIFejpEOU9bMYIbtC_m_qIn6N15sun0',e:'https://drive.google.com/drive/folders/1x5FIxKV0NZyfphniBNOZ_-sbNxlAjNXt'},
+    11: {a:'https://drive.google.com/drive/folders/1Y50jXcopcQtBgooUBWSJSvkxiVLSbKai',p:'https://drive.google.com/drive/folders/10qEt0tcTxKtKy9rSvVp8Gbtq8TFNsp8b',e:'https://drive.google.com/drive/folders/179XYF6QPscNDwUKr8WiEXApfZEZZsuog'},
+    12: {a:'https://drive.google.com/drive/folders/1GczImpZ7qglR2Up45hmep6W0ECFIOo7P',p:'https://drive.google.com/drive/folders/1Zf5OfCUKdRAZdyq7-mrARpCwpEdu0KFC',e:'https://drive.google.com/drive/folders/1Ux5pvpFJolr3en160IHvC4amdU6_mtOk'},
+    13: {a:'https://drive.google.com/drive/folders/1JWYNngXhKayCw7LpC2kWgD2rErdP-AsL',p:'https://drive.google.com/drive/folders/1osSDhr9mFn8QK8G3pKETZfCgamQ-sH8e',e:'https://drive.google.com/drive/folders/1Ntsm00qIe0ZkKv5QyV-p91I0Pt1GDqZV'},
+    14: {a:'https://drive.google.com/drive/folders/1YFwk2keSaSWXq3ChYpbJPJZFkWuS2EpB',p:'https://drive.google.com/drive/folders/15LfgTD8fxuKUTnPUNAFwPA7GyIdbgbkc',e:'https://drive.google.com/drive/folders/1nSLhBRDMzp9EDFNQjHJqZI9SYimzjhc6'},
+    15: {a:'https://drive.google.com/drive/folders/1cIwNSmKtxCpI10HZ3wPvieYkBIW7b0UU',p:'https://drive.google.com/drive/folders/12siXue1wGL7wWQH3BEymG13ljF4j9Svn',e:'https://drive.google.com/drive/folders/1crqLTmZALfUnhmn893eZW5yddQGH9MAH'},
+    16: {a:'https://drive.google.com/drive/folders/11TRhFm1h-l2AhT7QFYDMuE4EG_3C11WO',p:'https://drive.google.com/drive/folders/1USF3nPtFdnBVVjx9diZwXaBZtdlOxQwG',e:'https://drive.google.com/drive/folders/1ibeHGJfMv9WrsX2CT_9prq3adHHw9tpB'},
+    17: {a:'https://drive.google.com/drive/folders/1pH1JdETTlvjB5hLjmeosZwz3rR3DMQMl',p:'https://drive.google.com/drive/folders/1-g116TG-zaXV484ZeCd2LZL6-e0mGwtY',e:'https://drive.google.com/drive/folders/1uF7bGgbL4pGwIa82t9wcRBQTYByP3vTR'},
+    18: {a:'https://drive.google.com/drive/folders/18z6gbYMvkDroFZPMzQagYCGF-UUE6ok1',p:'https://drive.google.com/drive/folders/17zIyKIydpfIczzN8CCfH49cdcazAEC5E',e:'https://drive.google.com/drive/folders/1vRq5F3EWKt2p8KEvB6_zDgDPCYc_2Cnf'},
+    19: {a:'https://drive.google.com/drive/folders/1VIAMnqjPehNu-lgVxLJ7oxxr12fbyeQF',p:'https://drive.google.com/drive/folders/12mmBVKtxzwNxDotqeEMqXll3SsLHs_N7',e:'https://drive.google.com/drive/folders/1QZldXYPTOpDrBJsjP8BD2yo8OGJttiUY'},
+    20: {a:'https://drive.google.com/drive/folders/1aisW097fwscMvSnZLfaFgeyZmDXzYug2',p:'https://drive.google.com/drive/folders/1Oqhieaw6zVD48McOhGdIQiGDBN_7Wsf0',e:'https://drive.google.com/drive/folders/1PclEAmN5hwZRpoXN8uGpbV7ZH14KEB35'},
+    21: {a:'https://drive.google.com/drive/folders/1pMKZUxam8Y8hUUVNA3gXdzev8zfLol7d',p:'https://drive.google.com/drive/folders/1KsJo-qs1sqXYt9zR_pr13Ji1SWEkaSjA',e:'https://drive.google.com/drive/folders/1UsJL4LXL_TXDU4FbpscQVIHjpzlhsWRV'},
+    22: {a:'https://drive.google.com/drive/folders/1R-b6_7id0x3wQMGOC1Qrnbawxs67j61t',p:'https://drive.google.com/drive/folders/1MZOYVMsmyjWIiWtunnBrxOpCG3wauP_u',e:'https://drive.google.com/drive/folders/1TaG3_5CFUAy5VGk2wM9KZekewG48QzWM'},
+    23: {a:'https://drive.google.com/drive/folders/1nq1bj4ryCv_zFo2tU2jcLS4cXXAF9ktb',p:'https://drive.google.com/drive/folders/125QlHeBxKzE4VH0_RDZhPG_UL5ocqdpC',e:'https://drive.google.com/drive/folders/1PQAZZRYsxAglQFUo-w3ffxSR2CfezKIU'},
+    24: {a:'https://drive.google.com/drive/folders/1ZVqDupg4HjUvVXDs3OH9uJ7OxFDdp-qS',p:'https://drive.google.com/drive/folders/1j_MiIX9oD1hfVyyJxWmymZl1c2vDAKZ6',e:'https://drive.google.com/drive/folders/1xcnqk69G1jrj9uDy-FoePu_MG2Czi9vT'},
+    25: {a:'https://drive.google.com/drive/folders/1smGCo_MQ6FJ0hud-FZs-qhHQqa1Tt0o9',p:'https://drive.google.com/drive/folders/1l5hfxsjUC1G7WH-dRzZkd-A2nsN2X9KX',e:'https://drive.google.com/drive/folders/10y-fUx-OdA1Gx4KlPCNrTeZOEYGx_T_N'},
+    26: {a:'https://drive.google.com/drive/folders/1VpVvf2mrmR5fe6WGKwmRd-L2_r0uoJd5',p:'https://drive.google.com/drive/folders/1GPlrP4dykYi6OiAFaTGNF0CUpWD002ay',e:'https://drive.google.com/drive/folders/1Rhdx7ZOuzMmg1XclNMVtzjV2ezLsxaDs'},
+    27: {a:'https://drive.google.com/drive/folders/1k9iuxKzodvjm0PyoyE5HKGwunIXRdk9K',p:'https://drive.google.com/drive/folders/1I4aO7liHvW2pIUqMjO6cGZ-ZHykGdtDo',e:'https://drive.google.com/drive/folders/1xqJn_-cHsZTW6PZ_4r0HwN49kfUR4KWV'},
+    28: {a:'https://drive.google.com/drive/folders/1hKWTbKbKwLwFlpG9kVllYi96GYyzTpDA',p:'https://drive.google.com/drive/folders/1NvxaIeWjDo_NWHAKFwO1JwU1dRVdaJUE',e:'https://drive.google.com/drive/folders/1ZDzNA2Ya6WyF2UbP3CRlKekTDiX0wkv1'},
+    29: {a:'https://drive.google.com/drive/folders/1hDu5TUXJnqXQz9IOcL-ZZaxc2V8aVgSd',p:'https://drive.google.com/drive/folders/1-xm6i6H66gsC8mrQuWEMXLhGVy5sbjYy',e:'https://drive.google.com/drive/folders/1EZwF1vgQrmk-ZkKPo-3i92er5k3Hvt9F'},
+    30: {a:'https://drive.google.com/drive/folders/1qm9sVZqQvdOoD-7UUHrllWLHImtyFvaT',p:'https://drive.google.com/drive/folders/1Z7zokMAwb0d4FY688CRGB2yWTxQM7Nlb',e:'https://drive.google.com/drive/folders/15EMkz00f8qyPPVgZ8eVK-MoQHk0Zz1RJ'},
+    31: {a:'https://drive.google.com/drive/folders/1OFa8JvePfawZZ_vSIFDD6OCko4dwxK14',p:'https://drive.google.com/drive/folders/1jPk9RAnT3utzcbcxTAxXK6FwuebkjrPB',e:'https://drive.google.com/drive/folders/1hKbH3Z-beV327fMH53ZhpxykpdG2LGUb'},
+    32: {a:'https://drive.google.com/drive/folders/1ZaQ37mtRholRegPF5kBa145awP_Y2cQw',p:'https://drive.google.com/drive/folders/1s1p48qTMAkthXugW69_7bw7AmJX4ZUdd',e:'https://drive.google.com/drive/folders/1k8wfAtVnWTqR1jniC674JSMnjQvyvvgx'},
+    33: {a:'https://drive.google.com/drive/folders/1sqz3geLf_WJxY8hS8qVo6ircGXyXuykb',p:'https://drive.google.com/drive/folders/1JJ3daYiT2k70bP3X91PkWhGR9Bwil93Q',e:'https://drive.google.com/drive/folders/1mUVXSRTVoCXAufspMZNPEO9JAgk8BEIR'},
+    34: {a:'https://drive.google.com/drive/folders/1jes6cG0wLvx8Ffl_Xnypc5RE2cRCPiAb',p:'https://drive.google.com/drive/folders/1ee7thOxNcxfAECZ55VZ7L7R6zAduLlQh',e:'https://drive.google.com/drive/folders/10ELnPCiz51ggicJsousiMwKnSApKdwtJ'},
+    35: {a:'https://drive.google.com/drive/folders/1R6b92dw16KcQDM00ui0WQUeswLvDolqA',p:'https://drive.google.com/drive/folders/19EiOmiS_bgEW-DLoK5eQ_fCLGYLXSres',e:'https://drive.google.com/drive/folders/1EScdzr5VsK2LTCHQFBRmJ696AN5D60lc'},
+    36: {a:'https://drive.google.com/drive/folders/1SRDub2qX10PztUe1iPtlklAV5s2WOb2V',p:'https://drive.google.com/drive/folders/1Gg9krhUGq85BG-_zxghGRaWkIIJ7yLxl',e:'https://drive.google.com/drive/folders/1zEfIU8Viqw42xZNyEz7SH5M2eiEezlvw'},
+    37: {a:'https://drive.google.com/drive/folders/1ofy-62MR_66dWN2Wr-9DoGB8mPULnjq9',p:'https://drive.google.com/drive/folders/1RZLqM6qiEcL5xubAM2TOqkYC1z2eD5NN',e:'https://drive.google.com/drive/folders/1da7LAWRDq4LJpSXMikhozFTAeRtJDqpl'},
+    38: {a:'https://drive.google.com/drive/folders/10XVIm83GaYkGzsgL6-u1PwUeNhva0dd5',p:'https://drive.google.com/drive/folders/1vNYOgoPyCAP6USvhquEnNGvTl3z30pt8',e:'https://drive.google.com/drive/folders/1fbfbF5suUF4pwnmxvWCMqE8oqg_B-1Le'},
+    39: {a:'https://drive.google.com/drive/folders/1-vdDHqbj5EX2aRx4xUorOn3LMqgglPh_',p:'https://drive.google.com/drive/folders/1Si75XdRNj0FZOTRxJiKSe7ac0zGbFrYo',e:'https://drive.google.com/drive/folders/19Y63bi_O5HtnNFjWmBKk0Ao4D5ky84uU'},
+    40: {a:'https://drive.google.com/drive/folders/14GYX0uiioLYsRmBPwWauJMbuEksEI6ZB',p:'https://drive.google.com/drive/folders/1i1j8naaVl-xOkjjMYho-dP6AmfKgCqVI',e:'https://drive.google.com/drive/folders/1N_0uAJ07ORXv9ur3iOiZlNf8ScRBkUsE'},
+    41: {a:'https://drive.google.com/drive/folders/1eFWO7LrK-ca6PlGzpWPltdHMhdWiCW2s',p:'https://drive.google.com/drive/folders/18V5KJSKn7CfneEoJ0kUtqi4Oy3GpmCR0',e:'https://drive.google.com/drive/folders/1FtjitS9m4bd5Y7QbhvaD96lolIO8owRd'},
+    42: {a:'https://drive.google.com/drive/folders/16AdHLGZl8GPJv9a_iJPsJ8cZt0S4Gjb9',p:'https://drive.google.com/drive/folders/13F04fyhH7gCUwkowJ_jdkZUSPiZEH2QO',e:'https://drive.google.com/drive/folders/1WeLAPpjbOjWWWtq6M5H2A31ro453ukjD'},
+    43: {a:'https://drive.google.com/drive/folders/13Tua2VJTIZ0jSEdmf3V4_pQhhG3f_i6D',p:'https://drive.google.com/drive/folders/1YMz22cb1mC6B2LL5mEgFwgOIjLieCl4d',e:'https://drive.google.com/drive/folders/1huqpphG0Lz0ImAbWhGDbJz2Ay0OB0y4t'},
+    44: {a:'https://drive.google.com/drive/folders/1eRpZczd-9s5nFxxxPYb6FWAOYdW0Wf_B',p:'https://drive.google.com/drive/folders/1lpDhxY60Qe7sA8LJVWXoRdHahWGxDeby',e:'https://drive.google.com/drive/folders/1DBnwq_wG-6Za4JMTPGjqYH7bVENybu_E'},
+    45: {a:'https://drive.google.com/drive/folders/1IS5EeM4qX7QDdHAPUJK49l-l0O2OXU7w',p:'https://drive.google.com/drive/folders/1k2suWMjFpYL_2_GUkfTNgWE1d1fg_Pr2',e:'https://drive.google.com/drive/folders/1C3fq9XrWBkGJ7I6SIal3GHUvzbk7rEPt'},
+    46: {a:'https://drive.google.com/drive/folders/1oib9fOjxI0r9kyAP8IHr_ciohoL8h6dn',p:'https://drive.google.com/drive/folders/1ni93v6Li29AoRGzjs8v9t2z6fkRdMQDZ',e:'https://drive.google.com/drive/folders/1nFxDP9bsD16SdniN2UbOQhKFLc54uG1j'},
+    47: {a:'https://drive.google.com/drive/folders/1J4gnpatzws7zDg3mFW1XiBT7mSVctgHs',p:'https://drive.google.com/drive/folders/16HSGlw7kpYHuPyjktbn7VxY_rSEmERZX',e:'https://drive.google.com/drive/folders/1lSb1cRlVV-eMP8pgNtMrBudS42hXl-id'},
+    48: {a:'https://drive.google.com/drive/folders/1c2uvIk5ZCvkHVE8cOtW1sdBA8xBTaIan',p:'https://drive.google.com/drive/folders/1TwBTNWfhU4hOIDfws2dJ_NtltomgnW1v',e:'https://drive.google.com/drive/folders/18mcsF1WHPpveIjrl1DrmXjRqt4ZKjx2q'},
+    49: {a:'https://drive.google.com/drive/folders/1YXjWN0-pt1wnY71xmO47lCWEneI-hfoh',p:'https://drive.google.com/drive/folders/1ad5VjTUlCK4RuAMNhZyUbLPH9hPkzKsh',e:'https://drive.google.com/drive/folders/13ZOKVw9lVc5N1ESD_okVdkM1gPUgAuID'},
+    50: {a:'https://drive.google.com/drive/folders/13HrdtmjqLiqH8PDuN7movJcb-PTKH3dn',p:'https://drive.google.com/drive/folders/1DYNvZi2IaA5Eh8R2GEU9AaDicUrKhic3',e:'https://drive.google.com/drive/folders/1Mow9RbSKMnLGXSwIjKoFR6HMUTxgO0uu'},
+    51: {a:'https://drive.google.com/drive/folders/1xUmJ7ND9bqMdv2QVxeqEOubgW48XGAjz',p:'https://drive.google.com/drive/folders/12jDTHGTpDig6MKvq1P1YykR4i42ZwB2M',e:'https://drive.google.com/drive/folders/1FVF3CLKxAp-kAR0aF0OJvD5utK__HubV'},
+    52: {a:'https://drive.google.com/drive/folders/1jrc5tK5tfFiB5Bm7nU3oME2MhTS9Zgqt',p:'https://drive.google.com/drive/folders/19MYBQrf9YG4YU0xJddfi0OeISPCcICBI',e:'https://drive.google.com/drive/folders/19ZQsax6otg0mYzFHuKmAYTkN5LYdRu_i'},
+    53: {a:'https://drive.google.com/drive/folders/1reqqblitXBE5aroa3odcE_djvbKBo4wh',p:'https://drive.google.com/drive/folders/1SlQMYU9-tYIIFGNR7a1BmskhepafR9KI',e:'https://drive.google.com/drive/folders/1voGYrnm95J-o70EGbAal5Y_yQh8HDv61'},
+    54: {a:'https://drive.google.com/drive/folders/1k3MciEvwONHEnMY3Ryhso9UG4RK6O8Ak',p:'https://drive.google.com/drive/folders/1zQnFdEQp8JGHBdcZrS5OkLzT8osL_cA_',e:'https://drive.google.com/drive/folders/1NQlQ3XzFevlkMGDqWuNXXkOJ4EDx8kfR'},
+    55: {a:'https://drive.google.com/drive/folders/1twLFpOSyxowSA9umD_-cVyEbIwU03YLc',p:'https://drive.google.com/drive/folders/1iud0DG_ToNT25p5xlBb-p4ZXyvDDmqHN',e:'https://drive.google.com/drive/folders/1aO62SyeJ6YNUk-m5qGVwljMWihldcTLX'},
+    56: {a:'https://drive.google.com/drive/folders/1GxxMONI3tTxHTYDdHMNeSpGi9xsgtb8n',p:'https://drive.google.com/drive/folders/1OIInL9G6B72rrK_mI-OGzis9X7WnURH1',e:'https://drive.google.com/drive/folders/1xZwxmChLNgNC63rdolH7PLjU6g-Uy67r'},
+  },
+  zootecnia: {
+    1: {a:'https://drive.google.com/drive/folders/1klI7LaDy9H3ijnKR8Z75lIURu9Q1Mhrn',p:'https://drive.google.com/drive/folders/1-aDatjy44PNU4TIZVIZGeOpPad2PWW2d',e:'https://drive.google.com/drive/folders/1nj4OKGzTfQApEkjAUQkjuE_Nh4krW_RW'},
+    2: {a:'https://drive.google.com/drive/folders/1goVj_cUc4TOB18wcvHdFB0WOH8DOq8bp',p:'https://drive.google.com/drive/folders/1gW8FzkQRNmgYj1X_gTMnbetzh85LRCjs',e:'https://drive.google.com/drive/folders/1bMZojB-AV6c5lWNNnq6L3fRvyIa_o-pX'},
+    3: {a:'https://drive.google.com/drive/folders/1nYLWEP3NXJR4sXqr5a6ckaR0cJqTXt03',p:'https://drive.google.com/drive/folders/1W9PouHIlAujaqbZryFzYCsuoonvsfJJt',e:'https://drive.google.com/drive/folders/1t76FDuCypojAsT686hVx8__i4tAdTxah'},
+    4: {a:'https://drive.google.com/drive/folders/1FPtBpsn8u8sjGivM9eLE7yt2QHWsPtvS',p:'https://drive.google.com/drive/folders/1W0XYGvfDeUTS_FOj0CuaGHXKnWwKwFTV',e:'https://drive.google.com/drive/folders/12MhxajsIjHomR3K4_t9p_uOqF2eo35sU'},
+    5: {a:'https://drive.google.com/drive/folders/10UyY2JTzUtJ0Qv4Q7vDefG6Fl94wVM6M',p:'https://drive.google.com/drive/folders/10UjV9ggase-k1nIN6SH0de8L-JcHCj9u',e:'https://drive.google.com/drive/folders/14IEpLTwdRx_ai5CzTtynsbgZUbWJe8MM'},
+    6: {a:'https://drive.google.com/drive/folders/13cwI_Xa_boBrvTEmhqOFiv0MW9kb4a_x',p:'https://drive.google.com/drive/folders/1wYkP7l0T4Pp0fuycQaltxE13NZDilexk',e:'https://drive.google.com/drive/folders/1kZ2nmgJ5W8QrREtGBG9S5RnWkAGZ_XRF'},
+    7: {a:'https://drive.google.com/drive/folders/1dOgdNua-WAWy1rAp3HAVpmjnkTHEBuS1',p:'https://drive.google.com/drive/folders/1uMRtMWbsg1_tFfwHFf6gXRp3_6n7iKu8',e:'https://drive.google.com/drive/folders/1SOVMerT7cRvenGxcKOvfTxah_5aMhL_4'},
+    8: {a:'https://drive.google.com/drive/folders/11alTlfwXrObvIVgBh_Yz_vcj3ENHN7sN',p:'https://drive.google.com/drive/folders/1RKkiRIDJwxzyKFVF93uVMcVJGA3Fk6tB',e:'https://drive.google.com/drive/folders/11JI4HKPfQHW1LjUt0DbaWUPCdcxf22OY'},
+    9: {a:'https://drive.google.com/drive/folders/1bIfcgL9sPWz5tN1KdNRxAqXYb2_JWLsH',p:'https://drive.google.com/drive/folders/1OKNpqImHoU5fqwMvU0kQoh2B38_J_-Qv',e:'https://drive.google.com/drive/folders/1NRkr0HxSuAf33OTQrciZbel0sqsT8E-i'},
+    10: {a:'https://drive.google.com/drive/folders/1nHPnnsEcjCo-sUgH46OetkBng2AEg46D',p:'https://drive.google.com/drive/folders/1aE0dKooFgsM2AQn7ip3ac8VJoiNjvLwY',e:'https://drive.google.com/drive/folders/1OXqqLugrgKedOu5hnstfHm07SOTm_I8L'},
+    11: {a:'https://drive.google.com/drive/folders/1ljrvEEX4Vdsz9oDKeleiMuyrTKL-hjcj',p:'https://drive.google.com/drive/folders/1FsRdL9WDHV3f8i_ZnWyqHNpDGifjI54b',e:'https://drive.google.com/drive/folders/1hJ490QM3pa1DO7AZ1U0JINi1W2bCsfav'},
+    12: {a:'https://drive.google.com/drive/folders/1TXt7oj8SNz82Q3PhHz0Kt6kc0i9c_8M2',p:'https://drive.google.com/drive/folders/1P43kuow3U9ACkiJ3RvT2lfGDNXTz0oBx',e:'https://drive.google.com/drive/folders/1iMqlEy71XWwx8hpn9lUNhntCmuzIPQ8K'},
+    13: {a:'https://drive.google.com/drive/folders/1VKRlPCUcVgmmF7K1krv0mw-8_1ZaVkd2',p:'https://drive.google.com/drive/folders/1UyBAxTuFqYVr5x7-PV43gg19grfJ0qsq',e:'https://drive.google.com/drive/folders/1XPAYK3Cj5Muiw0YpIM0YC-JXwnsR-PqD'},
+    14: {a:'https://drive.google.com/drive/folders/1RPVCXYvN4UZwyB89IGfwnXYJJEiSA5m4',p:'https://drive.google.com/drive/folders/1zt4nP9xrD1_iaX7g5IvEhzgInOqxIwRU',e:'https://drive.google.com/drive/folders/1tJu4sXLl4-PNsGQLbexTc3i69N7cPH62'},
+    15: {a:'https://drive.google.com/drive/folders/13GG1jm37ZSwWhUevXg3FZhjqRtrU2P6l',p:'https://drive.google.com/drive/folders/1XZDDX8RzJM5OTufrfh6JD4cYJ0eYmf_s',e:'https://drive.google.com/drive/folders/1xqKPPQOjLNVBQqeIFAhEEt3ZYPAMDmGh'},
+    16: {a:'https://drive.google.com/drive/folders/12hdx_e0RLs1tZ10BfjcXkQUyAzdYGOar',p:'https://drive.google.com/drive/folders/1S3Emi1Oy2PTK4yNDadUTBPYISHFce9G3',e:'https://drive.google.com/drive/folders/1KDfTwAs_dgLm_URIZ1D_R5XNX9h90GR9'},
+    17: {a:'https://drive.google.com/drive/folders/12kv6j8iVfizRUKttnbNORjO_3pyKTcpI',p:'https://drive.google.com/drive/folders/1pvSg8wjtNZ6tkSgM29hinYHWX6cFfiuv',e:'https://drive.google.com/drive/folders/1D-Du1oEuns_OF1ePIpW7LwPSPM9v4jJR'},
+    18: {a:'https://drive.google.com/drive/folders/19n02QES8UfYq6G-ZNCgHHHatmMUVFph5',p:'https://drive.google.com/drive/folders/1iSYhT9CTxqA0aVmumaDbxxM96YPsMAaY',e:'https://drive.google.com/drive/folders/1pYgzsOSXhEV5VcNK8ITvGsUlyBqQBRx5'},
+    19: {a:'https://drive.google.com/drive/folders/1dkMb32rGZeK4Dp_77lFD-S3tFqV_Zp_N',p:'https://drive.google.com/drive/folders/1IhTdnx-EpWwEqB-1d1VCoK3OAQVcDzAr',e:'https://drive.google.com/drive/folders/1Gg2Q-bBPgxu5v3Jqfq7lDeTkHAD453G8'},
+    20: {a:'https://drive.google.com/drive/folders/1k4RbJyO6wDVOQAlvLA7tqh6_ncJtKdJG',p:'https://drive.google.com/drive/folders/1Kqps3tipcJSvmTv5dtIajH1nhcVtYIK_',e:'https://drive.google.com/drive/folders/1EdYEY3K1ldom4vG--wzk1K1YM8u-vUnn'},
+    21: {a:'https://drive.google.com/drive/folders/1v7Pydph4K9gCLCugF6bzlaCpmHX6IbAN',p:'https://drive.google.com/drive/folders/1kpdXx4Xr1mxxrG9c-u_Vf-FAB3eWfyPJ',e:'https://drive.google.com/drive/folders/1SVV7XNYt8NZ3_0zun_kQDLVmKt7dlogV'},
+    22: {a:'https://drive.google.com/drive/folders/1K5TKD7Ok1kRqjNHc7y8tE5RcOE8d8p-B',p:'https://drive.google.com/drive/folders/18xYcRhh_YLSNEZL9sZAS-jS9NMZA7l8a',e:'https://drive.google.com/drive/folders/1gkJEukYhnMeyGuAIBbqUy78lPu_OI5Ep'},
+    23: {a:'https://drive.google.com/drive/folders/1d91zYqAmTZpOMPyj96nPQf37cX3doW7C',p:'https://drive.google.com/drive/folders/130QkFQvjwIHyipsoqOLVnEKXO39FwbD8',e:'https://drive.google.com/drive/folders/1sX4Arh2TsFkD9q5PyvROSY9nuApddEYG'},
+    24: {a:'https://drive.google.com/drive/folders/1GMDf8qrdaDxoJigOKBz8nY447OtpT7Ow',p:'https://drive.google.com/drive/folders/10SFN55DH6kcAR12vsQ7K6Hrb2YdEi156',e:'https://drive.google.com/drive/folders/1O9rUu64MJva4fErTNjtzzskV3UDIsXRU'},
+    25: {a:'https://drive.google.com/drive/folders/1xfGl1jfNSEefmRcspxMMLkxg40mK-Uyw',p:'https://drive.google.com/drive/folders/1e528bnO9nOSzlKWjWLtYWLk3TVqQml-t',e:'https://drive.google.com/drive/folders/1inbQiOjXNqpFEfjzxO1RepTfkXSh8LuQ'},
+    26: {a:'https://drive.google.com/drive/folders/1LBiN7tDtrgR9aoQXRBN1VLadkz8Z02f_',p:'https://drive.google.com/drive/folders/1N36X1lgDHfzW49jlQN_NojJQqkRtzVLu',e:'https://drive.google.com/drive/folders/167l9HNxUuw88MpVRvvSLqCyM0nhe8mcd'},
+    27: {a:'https://drive.google.com/drive/folders/1VDQ2cwyKeAH80i-nKBOMyCnFzeOsLMv-',p:'https://drive.google.com/drive/folders/1jkyNRVaGQ4i-mHd1QdqpubGNfJFjRHEf',e:'https://drive.google.com/drive/folders/1Vc_FeeIIFECEvn1CMb3nYi0iKJv7x-eJ'},
+    28: {a:'https://drive.google.com/drive/folders/1DFLX-mPpRKokXiK3iy1y8qgcZCbAjmUl',p:'https://drive.google.com/drive/folders/16GHcua8HwHfavJJY-3lzOWm_0qomNsmW',e:'https://drive.google.com/drive/folders/1r8k7svG28LydAKa7x9o7WX91cy-uyCSE'},
+    29: {a:'https://drive.google.com/drive/folders/1vvk6SPtp1SkhSNXsIcRBTYajVrHe9qpW',p:'https://drive.google.com/drive/folders/1Ca7s_t_JMOI0jyiGRRhlgMAPii8NaAFb',e:'https://drive.google.com/drive/folders/1WmtC8hc1u7z76rcbzsOC1pbPD2W6_DCq'},
+    30: {a:'https://drive.google.com/drive/folders/1kfKO-uBeyi0A0cyL8rs2no2hQL5Oein_',p:'https://drive.google.com/drive/folders/1r1cByOexTj6FwPhsfYwVIuhBi3sit3ZF',e:'https://drive.google.com/drive/folders/16NtLyvCupz79BV6rTPQLab7G_xHlrCxI'},
+    31: {a:'https://drive.google.com/drive/folders/1XA7eaghDbMF4hijZCn2WfSrxHS9eb9-0',p:'https://drive.google.com/drive/folders/1ibEihhGm0l5wVMlbLwaBvh26mhCT6PHS',e:'https://drive.google.com/drive/folders/1NGaU3nLI3eSTkVRxkmXZc05K4D4OYTjA'},
+    32: {a:'https://drive.google.com/drive/folders/1tQpxUkYOhaah2OZJ64v8CsEd0VywcnlS',p:'https://drive.google.com/drive/folders/1_YNZ-98XS38igmQXGIrCYnOvAVT_dcXl',e:'https://drive.google.com/drive/folders/1Firb4BhKgqqWSIZnLVolRT7Ffsp2U49b'},
+    33: {a:'https://drive.google.com/drive/folders/1qQ8BbHcU0k-AkF-j3Yn7qaDHlEBdZ7im',p:'https://drive.google.com/drive/folders/1fCRpT9tiGKRgWZ74CywinH1VbLWuNg3z',e:'https://drive.google.com/drive/folders/1Ho-wkX-HPffkW-BycN3dHhaumMdyCt5Q'},
+    34: {a:'https://drive.google.com/drive/folders/19o4SARvoHWr3gMxVylNn-FEr788ykAQJ',p:'https://drive.google.com/drive/folders/16CbHCqF-8xBDUMMK_LuctfsOyBEY00uT',e:'https://drive.google.com/drive/folders/1svv5HJrJEIKKWQLoZ8Te2hU5kJptqTSL'},
+    35: {a:'https://drive.google.com/drive/folders/1VdT2uX-_2zK3WTmzIuPy1lDIXhzSBQAc',p:'https://drive.google.com/drive/folders/1oBJ4Us7dIOCBiMz0BZzJRDx_M3L26lFl',e:'https://drive.google.com/drive/folders/113twuIsB8VJ8TCIEHF9yAO6vi886xTe_'},
+    36: {a:'https://drive.google.com/drive/folders/1DKDjgTJ-yEemjkTq3lZ1g5-oyPSIUl6y',p:'https://drive.google.com/drive/folders/1iXDEVTadtrXMcIcQySFFxps_isQNhJEr',e:'https://drive.google.com/drive/folders/1GdaULrXaq2nuhMtb0gyUKgbisScQKRSX'},
+    37: {a:'https://drive.google.com/drive/folders/1grey7TuEWqhNjvlPD1R5DPNCoGSF1e-z',p:'https://drive.google.com/drive/folders/1l6nolFXOa0Jt27p4KaIzSXt9A_UrzeZW',e:'https://drive.google.com/drive/folders/1lGt3QWq7KDj8xTWPvOnLJgTaVhFSR31-'},
+    38: {a:'https://drive.google.com/drive/folders/1JDzPSj-x5TchtFgEfEUZQ7S4xdTOAuZ6',p:'https://drive.google.com/drive/folders/1B0E4vug_CaWnDHse9BkI5UGowMSHmY0k',e:'https://drive.google.com/drive/folders/1yVblf_UQcdIAkv0PId69QA-Y-9rFwE6V'},
+    39: {a:'https://drive.google.com/drive/folders/1oNCCrQUQSYWQZiycgRazE8bNAGtPXD7C',p:'https://drive.google.com/drive/folders/1GYQhLf__9OMEH3Zx2SYruVFiD5Gv0PsV',e:'https://drive.google.com/drive/folders/1HQTyHDI1RrpWWRWqNEmVOqD20QN7yq4r'},
+    40: {a:'https://drive.google.com/drive/folders/1JNd4oAOeS-WH8I-jsMd58haiZ-h_gfq-',p:'https://drive.google.com/drive/folders/1A76liApK77AnvwAlcPJQXpAueQsinJqv',e:'https://drive.google.com/drive/folders/1MzUzljQVy9WXpCkrBvxS4KoObQKn31zx'},
+    41: {a:'https://drive.google.com/drive/folders/1QEj2XKoUIApRYQBoYEb5H5vOatz5e_gW',p:'https://drive.google.com/drive/folders/10nCKttj9rvYaVOSaZqdG4frzFvx-isn_',e:'https://drive.google.com/drive/folders/1SYLSWJS7izK2GwdnfihUVV_KC9ja3yNc'},
+    42: {a:'https://drive.google.com/drive/folders/1YfhVRoR850WJpsBpExvVynp-qPxTM0e8',p:'https://drive.google.com/drive/folders/1gutYahBnJBRJ37jUZZraE4brxbPEGhJd',e:'https://drive.google.com/drive/folders/1RK7gc667dR_VL3jcqoUM3Zzq2oJWkJgR'},
+    43: {a:'https://drive.google.com/drive/folders/1jLxefhy021_2Kt6l0XO6aPn1pcUpC6bX',p:'https://drive.google.com/drive/folders/1-un-i-5-C5P0Q9qMEphN-Wl2xfBnUyAC',e:'https://drive.google.com/drive/folders/19BaOuURZibeE0DjYKW0WOxt3NsFcGKrj'},
+    44: {a:'https://drive.google.com/drive/folders/19_1NXxhj_zQCYCl4AM3bahcuSafd__sX',p:'https://drive.google.com/drive/folders/10wv3wYjYopzlFoU5fwpR7UgsC4pim2mF',e:'https://drive.google.com/drive/folders/13S8X1cqyb-JQC6Ve3wYVSsxy5WTl4lJY'},
+    45: {a:'https://drive.google.com/drive/folders/1qIwhjnNsCc5RhmXzu_aFRQ2i0myt-Z2A',p:'https://drive.google.com/drive/folders/1DC2c1PwPzq367Hd0epZPSktYJOsalX_A',e:'https://drive.google.com/drive/folders/1e4dlrI1Gnyo7JBxioHcOXKFUYOCrdsW7'},
+  },
+  fitotecnia: {
+    1: {a:'https://drive.google.com/drive/folders/15Pm1ItVWDd_4IGAvHdoQKGbALW7jyZ1q',p:'https://drive.google.com/drive/folders/1WSOuUxG9tnxfZ-UvhD9hFhMFsQZCrTGv',e:'https://drive.google.com/drive/folders/1lfswVUkZZbvNSMEe8cviI4gWLNUZXjBP'},
+    2: {a:'https://drive.google.com/drive/folders/1Wi3z3K3zqFmOOaiYETld9_s7oGlvN_lq',p:'https://drive.google.com/drive/folders/144MYTOPzwFs0uSMa3K7UwUnOh8vNq86v',e:'https://drive.google.com/drive/folders/1LQaGPlxJHVeo2Ya9aBAhUbAfkD_Nkaxk'},
+    3: {a:'https://drive.google.com/drive/folders/1nqCUCSE4FyExpIxbq013mc2ndp7O_XTb',p:'https://drive.google.com/drive/folders/1EeGg_Q7z7D7WzcIdFSExweUjsJ0pOyDY',e:'https://drive.google.com/drive/folders/1mepRer85uW3o19Y8NpEHoEpA57QFBBKh'},
+    4: {a:'https://drive.google.com/drive/folders/1dGY8xcUEyj0468hKH6mMWFVmiD4yit_o',p:'https://drive.google.com/drive/folders/1JyLhurm6NNoGtK3uQ2a-19zcayv75RFz',e:'https://drive.google.com/drive/folders/1kDBHGafBvu1o9H5EnnwvI3yX_t38Esy7'},
+    5: {a:'https://drive.google.com/drive/folders/1_v3HCYZsF-VuyWZLi4xntnoOyKvKkNpu',p:'https://drive.google.com/drive/folders/10e_Os8CB8DXqVy7TtPuQH8K_CLPCv0Ti',e:'https://drive.google.com/drive/folders/107evDx1Cz0gUjITm1h5Uiiy_fslpHWpl'},
+    6: {a:'https://drive.google.com/drive/folders/1Ft2FNuBdB6r9i22OxHQkytKoSJIJ_YAN',p:'https://drive.google.com/drive/folders/1NfT-SQlE0KMO-5U2ABZedyAGKwBpsD36',e:'https://drive.google.com/drive/folders/1SLhXqXuAmqqv8rpAZjbiPIOE6276wxw6'},
+    7: {a:'https://drive.google.com/drive/folders/1y3PKnEEFDa1cl2coc247Sks6TogEa_9P',p:'https://drive.google.com/drive/folders/17bBdx7khH0sjAZF8KS6oBJpPuQ18cQlb',e:'https://drive.google.com/drive/folders/1hTsJIusprGF76QNUXKV9ZI8t64GavV_1'},
+    8: {a:'https://drive.google.com/drive/folders/10r-vZkqDy4clJGkILQVKsFakxP7lfCov',p:'https://drive.google.com/drive/folders/1d9_GBaKRC7WSUDvq7qZz4SGouIbDa2wH',e:'https://drive.google.com/drive/folders/1pw-rYAiXRdKpB1OWIgWdUogLRMmRR7Xg'},
+    9: {a:'https://drive.google.com/drive/folders/1nbXP6EzEe1NRjKzl2Jcp3TDahebXadOV',p:'https://drive.google.com/drive/folders/1K9E_5b4NhrnIXtohATHnNEv_vPZN_hU3',e:'https://drive.google.com/drive/folders/1HUfW-OHdCsYX1gT7F0C7BbRMe0MqawhL'},
+    10: {a:'https://drive.google.com/drive/folders/1sOtVAG8ERuAmTH1qTStMPf6IzkUW3Hv0',p:'https://drive.google.com/drive/folders/1kHvMkbjPqBomg4ztuxSKZDN2HfzrO10F',e:'https://drive.google.com/drive/folders/1VfgxxPFIBHmbJ98PZ2xQYq6t9oV7ym52'},
+    11: {a:'https://drive.google.com/drive/folders/10_exZ7aHUheficvZI8yXlIddBBkHnywB',p:'https://drive.google.com/drive/folders/1xYZ5RhBFIiwbALl7lGIUvVwqwyqZ1qVZ',e:'https://drive.google.com/drive/folders/1UCfhyG3eLF4-bUN5YRng0aOPnFh5tSEu'},
+    12: {a:'https://drive.google.com/drive/folders/16qHPWtxzV8Jz_rGQdXOBPQhvF_82Atu_',p:'https://drive.google.com/drive/folders/1Lm6uwdyOD-YHPMcS_IO3Ql1zWl4n8_cs',e:'https://drive.google.com/drive/folders/1a1JlH_GD1CKT5ylNQhtkgxhxc9-ThvHI'},
+    13: {a:'https://drive.google.com/drive/folders/1TBwNbAWSg3fFMjOqKx7Xn92wEz-icvWK',p:'https://drive.google.com/drive/folders/1web2fYfm9fIhcLKOn1lMZPPD5amc2epC',e:'https://drive.google.com/drive/folders/134WmNme4KZCMrI7GpDSRwwJEFsF9ztWD'},
+    14: {a:'https://drive.google.com/drive/folders/10Jxn47iAQXYKAEo8raqY1-sOVXVaFEjg',p:'https://drive.google.com/drive/folders/1BPoCs5glPVki3OlCRTKX_ivTAP9joEXc',e:'https://drive.google.com/drive/folders/1Vr4dCU8GJV1-RL70wm3HcKxR4onAXGyD'},
+    15: {a:'https://drive.google.com/drive/folders/16XZGBYJAm3rHZvPialDELqZ4ZqGSSyMu',p:'https://drive.google.com/drive/folders/12uXDAKlQWa5kwi52d45YUulUocORtFFT',e:'https://drive.google.com/drive/folders/1UfeC_p0HKnnK60kkRxmrAAplqeOCKMNa'},
+    16: {a:'https://drive.google.com/drive/folders/10uGhHpD-9I_PMpy47z974X0MX27Hx8Av',p:'https://drive.google.com/drive/folders/1bqgM1sPkTt51zFy1sduhvt6xwZxGf8SH',e:'https://drive.google.com/drive/folders/1yLeTIS_yhJn1XKnlCfIF8fsFM4guty3x'},
+    17: {a:'https://drive.google.com/drive/folders/1exavnA3dLNRIM1PiOOvFjeIU6955XASk',p:'https://drive.google.com/drive/folders/1RwcKSgazqPdJ7ei18ZwGAk-NWweMCQ07',e:'https://drive.google.com/drive/folders/1ludvLHtMp-32T-kMdvcoq2QNGo9zKtRj'},
+    18: {a:'https://drive.google.com/drive/folders/1eQIS3IiPLgPrM1qZ9ZkMjIYDHbhflaAj',p:'https://drive.google.com/drive/folders/1-LH3p83Wc_r6QDOufKVLtUVLYalmN860',e:'https://drive.google.com/drive/folders/1xaWm3c17v4dHq_ACKv4o9xh5oOus26ab'},
+    19: {a:'https://drive.google.com/drive/folders/1ZTyfN5VgqVjg0-k6wTweMQ3fqo3aGsPO',p:'https://drive.google.com/drive/folders/1J1H-NtDW2kbwHjodQvny1X0bGxM4yFpE',e:'https://drive.google.com/drive/folders/1_fxQB7k5-9U7MTFXqAsA3qhm1r0cG4K4'},
+    20: {a:'https://drive.google.com/drive/folders/1eP_cOvJuK3D3pQJ3K-EJY6jRt7fgio-F',p:'https://drive.google.com/drive/folders/1_J7Ih-6FLSeWIGzKEpc7NBijlf2DWE29',e:'https://drive.google.com/drive/folders/1okSCQZOdC6bYP75cG9UQ2IXxjXtEKf46'},
+    21: {a:'https://drive.google.com/drive/folders/1J_OGGZbaCWClC1Aw7xX3O4mKXF6xdlUX',p:'https://drive.google.com/drive/folders/1N07pYaioloS6II-xxXQE0IJpjuNHc01n',e:'https://drive.google.com/drive/folders/17ehPzSD0qlEdA_b15NRMRVBhoFt7MeOb'},
+    22: {a:'https://drive.google.com/drive/folders/1crXVFPLiOQ8KdTsiFIvPv4cRVQXW4ZIk',p:'https://drive.google.com/drive/folders/1zbBbUU_YtInHOipTkyifcwMWvDUdRFQ5',e:'https://drive.google.com/drive/folders/1kEsd8ZQW7xhmwAkwLphXfiLdZiqFYZce'},
+    23: {a:'https://drive.google.com/drive/folders/1AkueO6RDDEq3NI5kTAPeybdyYEqfnoUz',p:'https://drive.google.com/drive/folders/1j8c3trO62Xtt8WcpuclXPjT0kIysCGzL',e:'https://drive.google.com/drive/folders/1tzgcrU7I_1cWQD4S1J9UbchO7qzH0hh7'},
+    24: {a:'https://drive.google.com/drive/folders/1qKWbwGc_Qfa_XL61aG_FfSk68672SNVS',p:'https://drive.google.com/drive/folders/1cs9HXzPOd8iWtyKIL7upr6JSNM_MSwIz',e:'https://drive.google.com/drive/folders/1FwuplW5Av11aPoIef0GHBfzfbxwHHAka'},
+    25: {a:'https://drive.google.com/drive/folders/1vN9MCuK3JBHe00Rhe4CU5ruRYDt7k8ZN',p:'https://drive.google.com/drive/folders/1j-5vBjSrflbSBSRu2XurJBsX-6ar1T_g',e:'https://drive.google.com/drive/folders/1ijEE6k2vdW0LZ0VAZTDeB28_eGrfumGK'},
+    26: {a:'https://drive.google.com/drive/folders/1uSQtwyWi6kwEyB60xDtBEfpJ-5z59G03',p:'https://drive.google.com/drive/folders/19crkSIkINF4Di4LJ7V8TW2pcNpfPVKXk',e:'https://drive.google.com/drive/folders/1eJOLtogXPExGtyGS9Sjq03ngLs7Z66MF'},
+    27: {a:'https://drive.google.com/drive/folders/11Kc7ad3W7mFrZmHGwHZJ0KLbvHO4hCSN',p:'https://drive.google.com/drive/folders/1Q7_-7FjjDHQdOglZgOl_BZbOqSz_6x5K',e:'https://drive.google.com/drive/folders/1CAGbVLOnNDqtrSlL1k0V_L1cGFbHjTKZ'},
+    28: {a:'https://drive.google.com/drive/folders/1oYbIdwuMRbyZo4bsFBHHYvwM8hvxOjFF',p:'https://drive.google.com/drive/folders/16P_MFdi5J3iF188z440wJIj51YZD0TLa',e:'https://drive.google.com/drive/folders/159w4A_BjfGQGaKqwsKREiTAZFVnrSxCR'},
+    29: {a:'https://drive.google.com/drive/folders/1920SipRxT9TionDUSy7m51ShA2J6AY4d',p:'https://drive.google.com/drive/folders/1Du6ojYPqIGNEAGnxjcbbcjZ3ELERSur0',e:'https://drive.google.com/drive/folders/1fBGfEGFlU9bniFM_gMqQxzess3_S-nBc'},
+    30: {a:'https://drive.google.com/drive/folders/17fflU_EU72uuvrcWlcfCW24TDXXvGTdh',p:'https://drive.google.com/drive/folders/1h1lJr21h3eGp3V9jbJxQnY8Ra7rx5hVR',e:'https://drive.google.com/drive/folders/13p3GwVwVKZg3CwI47rUvgnjV4rag9HiH'},
+    31: {a:'https://drive.google.com/drive/folders/1JG9lvHEC5H37gZESFFoaJF5cT_eCXJLH',p:'https://drive.google.com/drive/folders/1H-e4RzM0A1_-k63RxySREVHB7h7xPFA7',e:'https://drive.google.com/drive/folders/1Hvwr1ShFymJ0-lCWnnGu5ABbd-hS9SAr'},
+    32: {a:'https://drive.google.com/drive/folders/17Zddjj-qxdExntxxEvfymrES06QyFM1I',p:'https://drive.google.com/drive/folders/1KE2XZvVm977Oq35mGPQav9nPWt9jJ7tj',e:'https://drive.google.com/drive/folders/197KxEdAD8w9QEc8hcWyUSJNGYJmv2Tw8'},
+    33: {a:'https://drive.google.com/drive/folders/1kJwCN00DrJxCIU53WNFF-wogGxACz1si',p:'https://drive.google.com/drive/folders/19pkyMP7_EIDRgdx6DH3qnOd7Hc_LOg_F',e:'https://drive.google.com/drive/folders/1livd_PUZbpXBvBs_S0IB8iKbDYWuW4-B'},
+    34: {a:'https://drive.google.com/drive/folders/13pQFhWdMbP3Y8BCPfJ4aPon4bt8Mp054',p:'https://drive.google.com/drive/folders/17lE8W8Zd2zxweAt83y2zhR6DDFP0mYzH',e:'https://drive.google.com/drive/folders/1ZMCyVEewxSmJ6OiMvGcYCpl_xtzH6Wj3'},
+    35: {a:'https://drive.google.com/drive/folders/18Gb7pbAjOIo-64J7kCzP89A1ZNiTTrgM',p:'https://drive.google.com/drive/folders/1cSM-lLG-UK4ocLvtsUMoX7pQj75atZfZ',e:'https://drive.google.com/drive/folders/1aenlMdDtgovxg3f3efBMBge_mQPwY7Ah'},
+    36: {a:'https://drive.google.com/drive/folders/1mQ2T5R7ST4xuKNnjny589jZH3jei3BUp',p:'https://drive.google.com/drive/folders/1yK32WlVPFxafiyDQ-HVPeq_VTMFQe3zP',e:'https://drive.google.com/drive/folders/1MOHUQlFhkBTuzT40m6SDGPDmFEarya5F'},
+    37: {a:'https://drive.google.com/drive/folders/1sPzMEdJAzMTcpNVm8cnoEYCLTIdrml5N',p:'https://drive.google.com/drive/folders/1Glv7l1oT69tMAlf-LqN670wk0ThnryK4',e:'https://drive.google.com/drive/folders/1p-QHsjUTJQq6MA3TqL3BfjPrQZSbCF3_'},
+    38: {a:'https://drive.google.com/drive/folders/1EWLASIqBMyKySCNW79jpUcFe4sFnh7Jq',p:'https://drive.google.com/drive/folders/1PJIfiqML7feajDi-A-LgzZhfdLRA0k0M',e:'https://drive.google.com/drive/folders/1lLmwkzlI5sd8NItb0S-uWK25FOI2atOg'},
+    39: {a:'https://drive.google.com/drive/folders/1AFyqHL1-M68Ee2UWbhI_ebhLP85r2gRb',p:'https://drive.google.com/drive/folders/1VyX7zQXRQ4VjJUFfk6gqq2JbrlcmAgse',e:'https://drive.google.com/drive/folders/1MdA0w9m3c2a45SljVrbi9YKZ5Ww9oReW'},
+    40: {a:'https://drive.google.com/drive/folders/1QPKUd2NANc8UZq5Fh9ninyEYfUBIzJRL',p:'https://drive.google.com/drive/folders/1BJU2CuztDOZ_nOrO3OcCrQKOii23ROGf',e:'https://drive.google.com/drive/folders/1rMKtY4Ac9kkNISSpwcVsXdsKZH8IkiqS'},
+    41: {a:'https://drive.google.com/drive/folders/1ItEngL229vcLy34LADMhBgRZswdkZAt2',p:'https://drive.google.com/drive/folders/1ZgJBlmScFVDQFRn_r8z0He1cmgqExlMr',e:'https://drive.google.com/drive/folders/1-_-u4nmdb2ybimln0KWdnnAvBQnibq5D'},
+    42: {a:'https://drive.google.com/drive/folders/1j8ArVmZwGSDbKQH7d10SsKezXFJvq737',p:'https://drive.google.com/drive/folders/1OdP_-KZfOFlW2oJVqroR6Ir6prKbdy2d',e:'https://drive.google.com/drive/folders/1_BiDptsLyp6xSi0JpVbqqiV320ksoMoN'},
+    43: {a:'https://drive.google.com/drive/folders/1a_TQid-cCP-VVOAqEYDKSbfL-s8ljSen',p:'https://drive.google.com/drive/folders/1OR1RQ6_tA04BthFiAceR4Im8XHm82edE',e:'https://drive.google.com/drive/folders/1OLWWzH7qpWSQq-MOAxrwmp1X5SuOlkga'},
+    44: {a:'https://drive.google.com/drive/folders/1fH5w962fvwzZxngCTAM_7pZIgciFJzOr',p:'https://drive.google.com/drive/folders/1xAG5X64n2aEEVf25dwK0Zv80VZBa2Uo2',e:'https://drive.google.com/drive/folders/1gD5l4QcAz8UI2PqlkaHMoQz6jyHea_NK'},
+    45: {a:'https://drive.google.com/drive/folders/1GM_LIKzGnipWb0FZS_S27TCvpy7-T7rw',p:'https://drive.google.com/drive/folders/1nct0ml94oqScYsKrsq2K4Lh_9n8ADkQP',e:'https://drive.google.com/drive/folders/1zPF3w80Fg_e0SocyF4vzxk-plU3Sbll5'},
+    46: {a:'https://drive.google.com/drive/folders/1F96V2DYsTdKhDZrxOOBDIGVx9DhcQxEc',p:'https://drive.google.com/drive/folders/1QIrZ9yqj-_TXaxOppZXxl_k403XrUFYx',e:'https://drive.google.com/drive/folders/1Fp26WVxbcJTfL4A6rwh_5ysS-eejVhRM'},
+    47: {a:'https://drive.google.com/drive/folders/1QR5oi-_17u8SPFVlOP-4LUERfh2q6ZMa',p:'https://drive.google.com/drive/folders/1PsmPv5CfPvvSko2POKrxYZP2-11h2qsN',e:'https://drive.google.com/drive/folders/1w1jOkgI4fG4fGqFQ0aZomRFFiYfcX7Q-'},
+    48: {a:'https://drive.google.com/drive/folders/1e_yQ7sd2M9ByHWoyH4nmVQeFKXCqoKUu',p:'https://drive.google.com/drive/folders/16WsRZ_LetsvQBBFqJ2F86297-UZIqkfE',e:'https://drive.google.com/drive/folders/1DvPk48VmjHnzHze9-uw8RTh6udx2f7ag'},
+    49: {a:'https://drive.google.com/drive/folders/13ZgE21xLRrS214XUQ4osC5S42jd_JAJ5',p:'https://drive.google.com/drive/folders/1T9s3F8hfbMq4OExEfWfZ5Vp_s5_pLjLy',e:'https://drive.google.com/drive/folders/1kOHUVU2Ie4r7j60LBxmzGK1YUsm1SeFY'},
+    50: {a:'https://drive.google.com/drive/folders/1ZMz2DnRhRMcfe1cUh2i0KteSH9C9hEBA',p:'https://drive.google.com/drive/folders/1vpp5zGkFDKMvJtfrTcH9hiWOTelEwPdN',e:'https://drive.google.com/drive/folders/1wFLUBhnMps0A6YvLuOWEzyVVaM4N5sWC'},
+    51: {a:'https://drive.google.com/drive/folders/1uas6EtkVwRXsyyAh7NtmLYypoDoV3BDf',p:'https://drive.google.com/drive/folders/1ROQN6e0KbStRI5zAoOAuVxuk6Sx-XwUy',e:'https://drive.google.com/drive/folders/1A8XvsQ7AdJSuiDoNe07BMQQSvE01VKrg'},
+    52: {a:'https://drive.google.com/drive/folders/1QTKzh2zj-DHGo2Q5Y3My5Wg-RLnv7ZXY',p:'https://drive.google.com/drive/folders/1svEpGFTmKo5LKhkrR2IN6KLjz1wYVmZx',e:'https://drive.google.com/drive/folders/13XAUPshQgB8MLuWDAhJsbon1CuVXnR2_'},
+    53: {a:'https://drive.google.com/drive/folders/1qQ4s9udQtRMNSigPf_TmsTkvZW5CbCC_',p:'https://drive.google.com/drive/folders/1rTLq2dhA4VDYouIXELT-_r3mKfgvVTD2',e:'https://drive.google.com/drive/folders/1HnG_N_gHvWXCjFdXRudOo8GIOSmTb2uo'},
+    54: {a:'https://drive.google.com/drive/folders/1gsvznJE-8HzzI7HfMdfkeEQdzv9Kul9E',p:'https://drive.google.com/drive/folders/1PO46GsnBbmLzaQejQc5a_cAVVjAKf1Ql',e:'https://drive.google.com/drive/folders/1edMZQ6B-4SPe-0c2O39LI-mNAhxRJ1-Z'},
+    55: {a:'https://drive.google.com/drive/folders/1WPwdOpzp2Q-SdI1MR1j4e3n-X1gMaopM',p:'https://drive.google.com/drive/folders/14Y1GkG_SLrHDalLCWXPAIb-Lp2TVBVVE',e:'https://drive.google.com/drive/folders/167Uw0B21fvPOVSHO2XOOy2ucYYeKYNJr'},
+  },
+};
+
+// ===== DATOS =====
+const CARRERAS = {
+  agronomia: {
+    nombre: 'Ingeniería Agronómica',
+    color: '#7bc67e',
+    semestres: 10,
+    fondo: 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?w=1600&q=80',
+    materias: {
+      1: [
+        {n:1, nombre:'Química General e Inorgánica', a:true, p:true, e:true},
+        {n:2, nombre:'Anatomía y Fisiología Animal', a:true, p:true, e:true},
+        {n:3, nombre:'Cálculo I', a:true, p:true, e:true},
+        {n:4, nombre:'Dibujo Técnico', a:true, p:true, e:true},
+        {n:5, nombre:'Morfología y Anatomía Vegetal', a:true, p:true, e:true},
+      ],
+      2: [
+        {n:6, nombre:'Química Analítica', a:true, p:true, e:true},
+        {n:7, nombre:'Cálculo II', a:true, p:true, e:true},
+        {n:8, nombre:'Física General', a:true, p:true, e:true},
+        {n:9, nombre:'Ecología General', a:true, p:true, e:true},
+        {n:10, nombre:'Sistemática Vegetal', a:true, p:true, e:true},
+        {n:11, nombre:'Sociología Rural', a:true, p:true, e:true},
+      ],
+      3: [
+        {n:12, nombre:'Química Orgánica', a:true, p:true, e:true},
+        {n:13, nombre:'Agroclimatología', a:true, p:true, e:true},
+        {n:14, nombre:'Edafología', a:true, p:true, e:true},
+        {n:15, nombre:'Topografía', a:true, p:true, e:true},
+        {n:16, nombre:'Álgebra Matricial', a:true, p:true, e:true},
+        {n:17, nombre:'Derecho Agrario', a:true, p:true, e:true},
+      ],
+      4: [
+        {n:18, nombre:'Bioquímica Agrícola', a:true, p:true, e:true},
+        {n:19, nombre:'Fertilidad y Fertilizantes', a:true, p:true, e:true},
+        {n:20, nombre:'Hidráulica', a:true, p:true, e:true},
+        {n:21, nombre:'Informática', a:true, p:true, e:true},
+        {n:22, nombre:'Maquinaria Agrícola', a:true, p:true, e:true},
+        {n:23, nombre:'Economía Agrícola', a:true, p:true, e:true},
+      ],
+      5: [
+        {n:24, nombre:'Zootecnia General', a:true, p:true, e:true},
+        {n:25, nombre:'Construcciones Rurales', a:true, p:true, e:true},
+        {n:26, nombre:'Riego y Drenajes', a:true, p:true, e:true},
+        {n:27, nombre:'Manejo y Conservación de Suelos', a:true, p:true, e:true},
+        {n:28, nombre:'Fisiología Vegetal', a:true, p:true, e:true},
+        {n:29, nombre:'Biometría y Estadística', a:true, p:true, e:true},
+      ],
+      6: [
+        {n:30, nombre:'Nutrición Animal', a:true, p:true, e:true},
+        {n:31, nombre:'Fitopatología', a:true, p:true, e:true},
+        {n:32, nombre:'Genética General', a:true, p:true, e:true},
+        {n:33, nombre:'Agricultura General', a:true, p:true, e:true},
+        {n:34, nombre:'Entomología', a:true, p:true, e:true},
+        {n:35, nombre:'Comunicación Agrícola', a:true, p:true, e:true},
+      ],
+      7: [
+        {n:36, nombre:'Sanidad Animal', a:true, p:true, e:true},
+        {n:37, nombre:'Dasonomía', a:true, p:true, e:true},
+        {n:38, nombre:'Diseños Experimentales', a:true, p:true, e:true},
+        {n:39, nombre:'Fito Mejoramiento I', a:true, p:true, e:true},
+        {n:40, nombre:'Fruticultura General', a:true, p:true, e:true},
+        {n:41, nombre:'Pastos y Forrajes', a:true, p:true, e:true},
+      ],
+      8: [
+        {n:42, nombre:'Tecnología Agrícola', a:true, p:true, e:true},
+        {n:43, nombre:'Agricultura Tropical', a:true, p:true, e:true},
+        {n:44, nombre:'Planificación y Proyectos', a:true, p:true, e:true},
+      ],
+      9: [
+        {n:45, nombre:'Producción Avícola', a:true, p:true, e:true},
+        {n:46, nombre:'Bovinotecnia de la Leche', a:true, p:true, e:true},
+        {n:47, nombre:'Administración de Empresas', a:true, p:true, e:true},
+        {n:48, nombre:'Extensión Agrícola', a:true, p:true, e:true},
+      ],
+      10: [
+        {n:49, nombre:'Trabajo de Grado / Tesis', a:true, p:true, e:true},
+        {n:50, nombre:'Práctica Profesional', a:true, p:true, e:true},
+      ],
+    }
+  },
+  agroindustrial: {
+    nombre: 'Ingeniería Agroindustrial',
+    color: '#f0a500',
+    semestres: 9,
+    fondo: 'https://images.unsplash.com/photo-1486297678162-eb2a19b0a32d?w=1600&q=80',
+    materias: {
+      1:[{n:1,nombre:'Química general e inorgánica',a:true,p:true,e:true},{n:2,nombre:'Zootecnia general',a:true,p:true,e:true},{n:3,nombre:'Cálculo I',a:true,p:true,e:true},{n:4,nombre:'Física general',a:true,p:true,e:true},{n:5,nombre:'Ecología general',a:true,p:true,e:true},{n:6,nombre:'Morfología y anatomía vegetal',a:true,p:true,e:true}],
+      2:[{n:7,nombre:'Química analítica',a:true,p:true,e:true},{n:8,nombre:'Tecnología agrícola',a:true,p:true,e:true},{n:9,nombre:'Operaciones básicas de la industria',a:true,p:true,e:true},{n:10,nombre:'Nutrición',a:true,p:true,e:true},{n:11,nombre:'Cálculo II',a:true,p:true,e:true},{n:12,nombre:'Fisiología vegetal',a:true,p:true,e:true}],
+      3:[{n:13,nombre:'Industrias agrícolas',a:true,p:true,e:true},{n:14,nombre:'Microbiología de alimentos',a:true,p:true,e:true},{n:15,nombre:'Química orgánica',a:true,p:true,e:true},{n:16,nombre:'Maquinaria y equipo agroindustrial',a:true,p:true,e:true},{n:17,nombre:'Industrias de bebidas',a:true,p:true,e:true},{n:18,nombre:'Agricultura general',a:true,p:true,e:true}],
+      4:[{n:19,nombre:'Industria de aceite y grasas',a:true,p:true,e:true},{n:20,nombre:'Industria de harinas y cereales',a:true,p:true,e:true},{n:21,nombre:'Química de alimentos',a:true,p:true,e:true},{n:22,nombre:'Tecnología de la carne I',a:true,p:true,e:true},{n:23,nombre:'Fruticultura general',a:true,p:true,e:true},{n:24,nombre:'Comercialización y mercadeo',a:true,p:true,e:true}],
+      5:[{n:25,nombre:'Tecnología de la leche',a:true,p:true,e:true},{n:26,nombre:'Práctica industrial',a:true,p:true,e:true},{n:27,nombre:'Planificación de industrias agrícolas',a:true,p:true,e:true},{n:28,nombre:'Control de calidad',a:true,p:true,e:true},{n:29,nombre:'Industrias de frutas y hortalizas',a:true,p:true,e:true},{n:30,nombre:'Informática',a:true,p:true,e:true}],
+      6:[{n:31,nombre:'Seguridad alimentaria',a:true,p:true,e:true},{n:32,nombre:'Bioquímica agrícola',a:true,p:true,e:true},{n:33,nombre:'Tecnología de la carne II',a:true,p:true,e:true},{n:34,nombre:'Tecnología del frío',a:true,p:true,e:true},{n:35,nombre:'Termodinámica',a:true,p:true,e:true},{n:36,nombre:'Postcosecha',a:true,p:true,e:true},{n:37,nombre:'Agronegocios',a:true,p:true,e:true}],
+      7:[{n:38,nombre:'Sistemas de gestión de control de calidad',a:true,p:true,e:true},{n:39,nombre:'Ingeniería de procesos agroindustriales I',a:true,p:true,e:true},{n:40,nombre:'Biometría y estadística',a:true,p:true,e:true},{n:41,nombre:'Manejo de postcosecha',a:true,p:true,e:true},{n:42,nombre:'Contabilidad y costos',a:true,p:true,e:true}],
+      8:[{n:43,nombre:'Desarrollo de productos',a:true,p:true,e:true},{n:44,nombre:'Ingeniería de procesos agroindustriales II',a:true,p:true,e:true},{n:45,nombre:'Taller de tesis',a:true,p:true,e:true},{n:46,nombre:'Diseños experimentales',a:true,p:true,e:true},{n:47,nombre:'Biotecnología I',a:true,p:true,e:true},{n:48,nombre:'Administración de empresas',a:true,p:true,e:true}],
+      9:[{n:49,nombre:'Modalidades de titulación',a:true,p:true,e:true}],
+    }
+  },
+  agricola: {
+    nombre: 'Ingeniería Agrícola',
+    color: '#4fc3f7',
+    semestres: 10,
+    fondo: 'https://images.unsplash.com/photo-1464226184884-fa280b87c399?w=1600&q=80',
+    materias: {
+      1:[{n:1,nombre:'Química general e inorgánica',a:true,p:true,e:true},{n:2,nombre:'Anatomía y fisiología animal',a:true,p:true,e:true},{n:3,nombre:'Cálculo I',a:true,p:true,e:true},{n:4,nombre:'Dibujo técnico',a:true,p:true,e:true},{n:5,nombre:'Morfología y anatomía vegetal',a:true,p:true,e:true}],
+      2:[{n:6,nombre:'Química analítica',a:true,p:true,e:true},{n:7,nombre:'Cálculo II',a:true,p:true,e:true},{n:8,nombre:'Física general',a:true,p:true,e:true},{n:9,nombre:'Ecología general',a:true,p:true,e:true},{n:10,nombre:'Sistemática vegetal',a:true,p:true,e:true},{n:11,nombre:'Sociología rural',a:true,p:true,e:true}],
+      3:[{n:12,nombre:'Agroclimatología',a:true,p:true,e:true},{n:13,nombre:'Edafología',a:true,p:true,e:true},{n:14,nombre:'Informática',a:true,p:true,e:true},{n:15,nombre:'Topografía',a:true,p:true,e:true},{n:16,nombre:'Álgebra matricial',a:true,p:true,e:true},{n:17,nombre:'Derecho agrario',a:true,p:true,e:true}],
+      4:[{n:18,nombre:'Fertilidad y fertilizantes',a:true,p:true,e:true},{n:19,nombre:'Hidráulica',a:true,p:true,e:true},{n:20,nombre:'Maquinaria agrícola',a:true,p:true,e:true},{n:21,nombre:'Informática II',a:true,p:true,e:true},{n:22,nombre:'Fisiología vegetal',a:true,p:true,e:true},{n:23,nombre:'Economía agrícola',a:true,p:true,e:true}],
+      5:[{n:24,nombre:'Construcciones rurales',a:true,p:true,e:true},{n:25,nombre:'Riegos y drenajes',a:true,p:true,e:true},{n:26,nombre:'Topografía aplicada',a:true,p:true,e:true},{n:27,nombre:'Manejo y conservación de suelos',a:true,p:true,e:true},{n:28,nombre:'Biometría y estadística',a:true,p:true,e:true},{n:29,nombre:'Agricultura general',a:true,p:true,e:true}],
+      6:[{n:30,nombre:'Física de suelos',a:true,p:true,e:true},{n:31,nombre:'Geomorfología y foto interpretación',a:true,p:true,e:true},{n:32,nombre:'Hidrología',a:true,p:true,e:true},{n:33,nombre:'Química de suelos',a:true,p:true,e:true},{n:34,nombre:'Mecanización agrícola',a:true,p:true,e:true},{n:35,nombre:'Teledetección',a:true,p:true,e:true}],
+      7:[{n:36,nombre:'Métodos de riego',a:true,p:true,e:true},{n:37,nombre:'Génesis y clasificación de suelos',a:true,p:true,e:true},{n:38,nombre:'Mecánica de suelos',a:true,p:true,e:true},{n:39,nombre:'Resistencia de materiales',a:true,p:true,e:true},{n:40,nombre:'Sistemas de información geográfica',a:true,p:true,e:true},{n:41,nombre:'Manejo integrado de cuencas hidrográficas',a:true,p:true,e:true}],
+      8:[{n:42,nombre:'Drenaje de tierras agrícolas',a:true,p:true,e:true},{n:43,nombre:'Obras hidráulicas',a:true,p:true,e:true},{n:44,nombre:'Evaluación de tierras',a:true,p:true,e:true},{n:45,nombre:'Taller de titulación I',a:true,p:true,e:true},{n:46,nombre:'Preparación y evaluación de proyectos',a:true,p:true,e:true},{n:47,nombre:'Desarrollo y fortalecimiento municipal',a:true,p:true,e:true}],
+      9:[{n:48,nombre:'Aguas subterráneas',a:true,p:true,e:true},{n:49,nombre:'Gestión de sistemas de riego',a:true,p:true,e:true},{n:50,nombre:'Construcciones rurales II y saneamiento rural',a:true,p:true,e:true},{n:51,nombre:'Taller de titulación II',a:true,p:true,e:true},{n:52,nombre:'Administración de empresas',a:true,p:true,e:true}],
+      10:[{n:53,nombre:'Modalidades de titulación',a:true,p:true,e:true},{n:54,nombre:'Diseño de sistemas de riego',a:true,p:true,e:true},{n:55,nombre:'Ordenamiento territorial',a:true,p:true,e:true},{n:56,nombre:'Taller de titulación III',a:true,p:true,e:true}],
+    }
+  },
+  zootecnia: {
+    nombre: 'Agronomía Zootecnista',
+    color: '#ffcc80',
+    semestres: 8,
+    fondo: 'https://images.unsplash.com/photo-1500595046743-cd271d694d30?w=1600&q=80',
+    materias: {
+      1:[{n:1,nombre:'Química general e inorgánica',a:true,p:true,e:true},{n:2,nombre:'Cálculo I',a:true,p:true,e:true},{n:3,nombre:'Física general',a:true,p:true,e:true},{n:4,nombre:'Ecología general',a:true,p:true,e:true},{n:5,nombre:'Morfología y anatomía vegetal',a:true,p:true,e:true},{n:6,nombre:'Sociología rural',a:true,p:true,e:true}],
+      2:[{n:7,nombre:'Anatomía y fisiología animal',a:true,p:true,e:true},{n:8,nombre:'Agroclimatología',a:true,p:true,e:true},{n:9,nombre:'Cálculo II',a:true,p:true,e:true},{n:10,nombre:'Edafología',a:true,p:true,e:true},{n:11,nombre:'Fisiología vegetal',a:true,p:true,e:true},{n:12,nombre:'Derecho agrario',a:true,p:true,e:true}],
+      3:[{n:13,nombre:'Bioquímica agrícola',a:true,p:true,e:true},{n:14,nombre:'Microbiología animal',a:true,p:true,e:true},{n:15,nombre:'Zootecnia general',a:true,p:true,e:true},{n:16,nombre:'Construcciones rurales',a:true,p:true,e:true},{n:17,nombre:'Maquinaria agrícola',a:true,p:true,e:true},{n:18,nombre:'Genética general',a:true,p:true,e:true}],
+      4:[{n:19,nombre:'Nutrición animal',a:true,p:true,e:true},{n:20,nombre:'Fertilidad y fertilizantes',a:true,p:true,e:true},{n:21,nombre:'Biometría y estadística',a:true,p:true,e:true},{n:22,nombre:'Agricultura general',a:true,p:true,e:true},{n:23,nombre:'Pastos y forrajes',a:true,p:true,e:true},{n:24,nombre:'Manejo integrado de plagas',a:true,p:true,e:true}],
+      5:[{n:25,nombre:'Alimentos y alimentación',a:true,p:true,e:true},{n:26,nombre:'Sanidad animal',a:true,p:true,e:true},{n:27,nombre:'Mejoramiento genético animal',a:true,p:true,e:true},{n:28,nombre:'Reproducción e inseminación artificial',a:true,p:true,e:true},{n:29,nombre:'Diseños experimentales',a:true,p:true,e:true},{n:30,nombre:'Agricultura tropical',a:true,p:true,e:true}],
+      6:[{n:31,nombre:'Animales menores',a:true,p:true,e:true},{n:32,nombre:'Bovinotecnia de la leche',a:true,p:true,e:true},{n:33,nombre:'Piscicultura',a:true,p:true,e:true},{n:34,nombre:'Producción porcina',a:true,p:true,e:true},{n:35,nombre:'Riegos y drenajes',a:true,p:true,e:true},{n:36,nombre:'Administración de empresas',a:true,p:true,e:true}],
+      7:[{n:37,nombre:'Producción avícola',a:true,p:true,e:true},{n:38,nombre:'Camélidos sudamericanos',a:true,p:true,e:true},{n:39,nombre:'Ganadería tropical',a:true,p:true,e:true},{n:40,nombre:'Aplicación software a la producción pecuaria',a:true,p:true,e:true},{n:41,nombre:'Producción de ovinos y caprinos',a:true,p:true,e:true},{n:42,nombre:'Preparación y evaluación de proyectos',a:true,p:true,e:true}],
+      8:[{n:43,nombre:'Modalidades de titulación',a:true,p:true,e:true},{n:44,nombre:'Tecnología de la carne',a:true,p:true,e:true},{n:45,nombre:'Agronegocios',a:true,p:true,e:true}],
+    }
+  },
+  fitotecnia: {
+    nombre: 'Agronomía Fitotecnista',
+    color: '#a5d6a7',
+    semestres: 10,
+    fondo: 'https://images.unsplash.com/photo-1416879595882-3373a0480b5b?w=1600&q=80',
+    materias: {
+      1:[{n:1,nombre:'Química general inorgánica',a:true,p:true,e:true},{n:2,nombre:'Anatomía y fisiología animal',a:true,p:true,e:true},{n:3,nombre:'Cálculo I',a:true,p:true,e:true},{n:4,nombre:'Dibujo técnico',a:true,p:true,e:true},{n:5,nombre:'Morfología y anatomía vegetal',a:true,p:true,e:true},{n:6,nombre:'Sociología rural',a:true,p:true,e:true}],
+      2:[{n:7,nombre:'Química analítica',a:true,p:true,e:true},{n:8,nombre:'Cálculo II',a:true,p:true,e:true},{n:9,nombre:'Edafología',a:true,p:true,e:true},{n:10,nombre:'Física general',a:true,p:true,e:true},{n:11,nombre:'Ecología general',a:true,p:true,e:true},{n:12,nombre:'Sistemática vegetal',a:true,p:true,e:true}],
+      3:[{n:13,nombre:'Agroclimatología',a:true,p:true,e:true},{n:14,nombre:'Fisiología vegetal',a:true,p:true,e:true},{n:15,nombre:'Fitopatología',a:true,p:true,e:true},{n:16,nombre:'Biometría y estadística',a:true,p:true,e:true},{n:17,nombre:'Fruticultura general',a:true,p:true,e:true},{n:18,nombre:'Entomología',a:true,p:true,e:true}],
+      4:[{n:19,nombre:'Construcciones rurales',a:true,p:true,e:true},{n:20,nombre:'Fertilidad y fertilizantes',a:true,p:true,e:true},{n:21,nombre:'Informática',a:true,p:true,e:true},{n:22,nombre:'Horticultura',a:true,p:true,e:true},{n:23,nombre:'Agricultura general',a:true,p:true,e:true},{n:24,nombre:'Fruticultura del valle',a:true,p:true,e:true}],
+      5:[{n:25,nombre:'Maquinaria agrícola',a:true,p:true,e:true},{n:26,nombre:'Fruticultura tropical',a:true,p:true,e:true},{n:27,nombre:'Floricultura',a:true,p:true,e:true},{n:28,nombre:'Agricultura tropical',a:true,p:true,e:true},{n:29,nombre:'Manejo integrado de plagas',a:true,p:true,e:true},{n:30,nombre:'Propagación de plantas',a:true,p:true,e:true}],
+      6:[{n:31,nombre:'Riegos y drenajes',a:true,p:true,e:true},{n:32,nombre:'Dasonomía',a:true,p:true,e:true},{n:33,nombre:'Genética general',a:true,p:true,e:true},{n:34,nombre:'Comunicación agrícola',a:true,p:true,e:true},{n:35,nombre:'Economía agrícola',a:true,p:true,e:true},{n:36,nombre:'Extensión agrícola',a:true,p:true,e:true}],
+      7:[{n:37,nombre:'Tecnología agrícola',a:true,p:true,e:true},{n:38,nombre:'Diseños experimentales',a:true,p:true,e:true},{n:39,nombre:'Fitomejoramiento I',a:true,p:true,e:true},{n:40,nombre:'Nematología y virología',a:true,p:true,e:true},{n:41,nombre:'Pastos y forrajes',a:true,p:true,e:true},{n:42,nombre:'Biotecnología I',a:true,p:true,e:true}],
+      8:[{n:43,nombre:'Producción y tecnología de semillas',a:true,p:true,e:true},{n:44,nombre:'Micología y bacteriología',a:true,p:true,e:true},{n:45,nombre:'Postcosecha',a:true,p:true,e:true},{n:46,nombre:'Ecofisiología',a:true,p:true,e:true},{n:47,nombre:'Administración de empresas',a:true,p:true,e:true},{n:48,nombre:'Planificación y proyectos',a:true,p:true,e:true}],
+      9:[{n:49,nombre:'Evaluación e impacto ambiental',a:true,p:true,e:true},{n:50,nombre:'Fitomejoramiento II',a:true,p:true,e:true},{n:51,nombre:'Resistencia genética a plagas',a:true,p:true,e:true},{n:52,nombre:'Biotecnología II',a:true,p:true,e:true},{n:53,nombre:'Producción cultivos estratégicos',a:true,p:true,e:true},{n:54,nombre:'Comercialización y mercadeo',a:true,p:true,e:true}],
+      10:[{n:55,nombre:'Modalidades de titulación',a:true,p:true,e:true}],
+    }
+  }
+};
+
+// ===== ESTADO =====
+let carreraActual = null;
+
+// ===== SISTEMA DE USUARIOS Y PROGRESO =====
+let usuarioActual = null; // string: SIS de 9 dígitos, o null
+
+// Espera a que Firebase esté listo antes de cualquier operación
+function waitFirebase() {
+  return new Promise(resolve => {
+    if (window._firebaseReady) return resolve();
+    document.addEventListener('firebase-ready', resolve, { once: true });
+  });
+}
+
+async function cargarDatosUsuario(pin) {
+  try {
+    await waitFirebase();
+    return await window._fbCargar(pin);
+  } catch(e) { return null; }
+}
+
+async function guardarDatosUsuario(pin, data) {
+  try {
+    await waitFirebase();
+    await window._fbGuardar(pin, data);
+  } catch(e) { console.error('Error guardando progreso:', e); }
+}
+
+// Caché en memoria — se carga una sola vez al iniciar sesión
+let _cacheData = null;
+
+async function getCacheData() {
+  if (_cacheData) return _cacheData;
+  _cacheData = await cargarDatosUsuario(usuarioActual) || { vencidas: {}, carrera: null, valoraciones: {} };
+  if (!_cacheData.vencidas) _cacheData.vencidas = {};
+  if (!_cacheData.valoraciones) _cacheData.valoraciones = {};
+  return _cacheData;
+}
+
+function limpiarCache() { _cacheData = null; }
+
+function getProgreso(carreraId) {
+  if (!usuarioActual || !_cacheData) return [];
+  return _cacheData.vencidas?.[carreraId] || [];
+}
+
+async function toggleVencida(carreraId, matNum) {
+  if (!usuarioActual) { abrirModal('modal-auth'); return; }
+  const data = await getCacheData();
+  if (!data.vencidas[carreraId]) data.vencidas[carreraId] = [];
+  const idx = data.vencidas[carreraId].indexOf(matNum);
+  if (idx >= 0) data.vencidas[carreraId].splice(idx, 1);
+  else data.vencidas[carreraId].push(matNum);
+  guardarDatosUsuario(usuarioActual, data); // sin await — guarda en segundo plano
+  verSemestre(carreraId, semestreActual);
+}
+
+function totalMateriasCarrera(carreraId) {
+  const c = CARRERAS[carreraId];
+  let total = 0;
+  for (const sem in c.materias) total += c.materias[sem].length;
+  return total;
+}
+
+// ===== AUTH UI — SOLO PIN =====
+function abrirModal(id) {
+  document.getElementById(id).classList.add('open');
+  if (id === 'modal-auth') {
+    for (let i = 0; i < 9; i++) {
+      const b = document.getElementById('pin' + i);
+      if (b) { b.value = ''; b.classList.remove('filled'); }
+    }
+    document.getElementById('pin-error').textContent = '';
+    setTimeout(() => document.getElementById('pin0').focus(), 100);
+    initPinBoxes();
+  }
+}
+function cerrarModal(id) {
+  document.getElementById(id).classList.remove('open');
+}
+
+function initPinBoxes() {
+  const TOTAL = 9;
+  for (let i = 0; i < TOTAL; i++) {
+    const box = document.getElementById('pin' + i);
+    if (!box) continue;
+    box.oninput = function() {
+      this.value = this.value.replace(/\D/g, '').slice(-1);
+      this.classList.toggle('filled', this.value !== '');
+      if (this.value && i < TOTAL - 1) document.getElementById('pin' + (i+1)).focus();
+      const pin = getPinValue();
+      if (pin.length === TOTAL) setTimeout(doLoginPin, 120);
+    };
+    box.onkeydown = function(e) {
+      if (e.key === 'Backspace' && !this.value && i > 0) {
+        document.getElementById('pin' + (i-1)).focus();
+      }
+    };
+  }
+}
+
+function getPinValue() {
+  let pin = '';
+  for (let i = 0; i < 9; i++) {
+    const b = document.getElementById('pin' + i);
+    if (b) pin += b.value;
+  }
+  return pin;
+}
+
+async function doLoginPin() {
+  const pin = getPinValue();
+  const err = document.getElementById('pin-error');
+  if (pin.length < 9) { err.textContent = 'Ingresa los 9 dígitos de tu código SIS.'; return; }
+  err.textContent = 'Conectando...';
+
+  const btn = document.getElementById('btn-pin-entrar');
+  btn.disabled = true; btn.textContent = 'Cargando...';
+
+  // Cargar desde Firebase (nube) — sincroniza entre dispositivos
+  let data = await cargarDatosUsuario(pin);
+  if (!data) {
+    // Primera vez con este SIS → crear perfil nuevo en la nube
+    data = { vencidas: {} };
+    await guardarDatosUsuario(pin, data);
+  }
+  usuarioActual = pin;
+  localStorage.setItem('biblio_sesion', pin);
+  limpiarCache();
+  await getCacheData(); // precargar datos en memoria
+  btn.disabled = false; btn.textContent = 'Entrar →';
+  err.textContent = '';
+  cerrarModal('modal-auth');
+  actualizarTopbar();
+  actualizarBannerInicio();
+  // Solo pedir carrera si es la primera vez (sin carrera Y sin materias marcadas)
+  const esNuevo = !_cacheData.carrera && Object.keys(_cacheData.vencidas || {}).length === 0;
+  if (esNuevo) {
+    setTimeout(() => abrirModal('modal-carrera'), 400);
+  }
+}
+
+async function elegirCarrera(carreraId) {
+  if (!usuarioActual) return;
+  const data = await getCacheData();
+  data.carrera = carreraId;
+  guardarDatosUsuario(usuarioActual, data);
+  cerrarModal('modal-carrera');
+  actualizarTopbar();
+  actualizarBannerInicio();
+}
+
+// ===== SISTEMA DE NIVELES =====
+const NIVELES = [
+  { min:0,  max:10,  icono:'🌰', nombre:'Semilla',        color:'#81c784', desc:'Apenas comenzando el camino' },
+  { min:11, max:30,  icono:'🌱', nombre:'Plántula',       color:'#64b5f6', desc:'Construyendo tu base académica' },
+  { min:31, max:50,  icono:'🌻', nombre:'Cultivo',        color:'#ffb74d', desc:'Ya tienes experiencia real' },
+  { min:51, max:70,  icono:'🌾', nombre:'Espiga',         color:'#ba68c8', desc:'Más de la mitad del camino recorrido' },
+  { min:71, max:90,  icono:'🚜', nombre:'Cosechador',      color:'#4dd0e1', desc:'La meta está muy cerca' },
+  { min:91, max:100, icono:'👨‍🌾', nombre:'Ingeniero',     color:'#ffd54f', desc:'¡Lo lograste! Carrera completada' },
+];
+
+const TITULO_FINAL = {
+  agronomia:      'Ingeniero Agrónomo',
+  agroindustrial: 'Ingeniero Agroindustrial',
+  agricola:       'Ingeniero Agrícola',
+  zootecnia:      'Ingeniero Zootecnista',
+  fitotecnia:     'Ingeniero Fitotecnista',
+};
+
+function getNivel(pct) {
+  return NIVELES.find(n => pct >= n.min && pct <= n.max) || NIVELES[0];
+}
+
+function getNivelHtml(pct) {
+  const nivel = getNivel(pct);
+  const siguiente = NIVELES[NIVELES.indexOf(nivel) + 1];
+  const pctEnNivel = siguiente
+    ? Math.round(((pct - nivel.min) / (siguiente.min - nivel.min)) * 100)
+    : 100;
+  const label = siguiente ? `Un poco más para ${siguiente.icono} ${siguiente.nombre}` : '¡Carrera completada!';
+  return `
+    <div class="nivel-card" style="border-color:${nivel.color}33;background:${nivel.color}0d">
+      <div class="nivel-icono">${nivel.icono}</div>
+      <div class="nivel-nombre" style="color:${nivel.color}">${nivel.min >= 91 ? (TITULO_FINAL[carreraId] || nivel.nombre) : nivel.nombre}</div>
+      <div class="nivel-desc">${nivel.desc}</div>
+      <div class="nivel-xp-wrap">
+        <span class="nivel-xp-label">${label}</span>
+        <div class="nivel-xp-bar-bg">
+          <div class="nivel-xp-bar-fill" style="width:${pctEnNivel}%;background:${nivel.color}"></div>
+        </div>
+      </div>
+    </div>`;
+}
+
+// ===== COMPARTIR PROGRESO =====
+async function compartirProgreso() {
+  const data = _cacheData || await getCacheData();
+  // Buscar carrera: primero en data, luego la que tenga más materias vencidas
+  let carreraId = data.carrera;
+  if (!carreraId) {
+    let max = 0;
+    for (const cid in CARRERAS) {
+      const v = data.vencidas?.[cid]?.length || 0;
+      if (v > max) { max = v; carreraId = cid; }
+    }
+  }
+  if (!carreraId) {
+    // Si no hay nada marcado, usar la primera carrera disponible
+    carreraId = Object.keys(CARRERAS)[0];
+  }
+  const c = CARRERAS[carreraId];
+  const venc = data.vencidas?.[carreraId]?.length || 0;
+  const total = totalMateriasCarrera(carreraId);
+  const pct = Math.round((venc / total) * 100);
+  const nivel = getNivel(pct);
+
+  const canvas = document.getElementById('share-canvas');
+  const W = 1080, H = 1080;
+  canvas.width = W; canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  // Fondo degradado oscuro
+  const bg = ctx.createLinearGradient(0, 0, W, H);
+  bg.addColorStop(0, '#0a1a0a');
+  bg.addColorStop(1, '#0d0d1a');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, W, H);
+
+  // Patrón de puntos sutil
+  ctx.fillStyle = 'rgba(255,255,255,0.03)';
+  for (let x = 0; x < W; x += 40)
+    for (let y = 0; y < H; y += 40)
+      ctx.fillRect(x, y, 2, 2);
+
+  // Borde superior color carrera
+  ctx.fillStyle = c.color;
+  ctx.fillRect(0, 0, W, 8);
+
+  // Logo texto FCAPyF
+  ctx.fillStyle = 'rgba(255,255,255,0.2)';
+  ctx.font = 'bold 32px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('FCAPyF · UMSS', W/2, 80);
+
+  // Icono nivel grande
+  ctx.font = '160px serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(nivel.icono, W/2, 320);
+
+  // Nivel nombre
+  ctx.fillStyle = nivel.color;
+  ctx.font = 'bold 72px sans-serif';
+  ctx.fillText(nivel.nombre, W/2, 420);
+
+  // Nombre carrera
+  ctx.fillStyle = 'rgba(255,255,255,0.7)';
+  ctx.font = '38px sans-serif';
+  ctx.fillText(c.nombre, W/2, 490);
+
+  // Porcentaje grande
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 200px sans-serif';
+  ctx.fillText(pct + '%', W/2, 720);
+
+  // Materias vencidas
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.font = '40px sans-serif';
+  ctx.fillText(venc + ' de ' + total + ' materias vencidas', W/2, 790);
+
+  // Barra de progreso
+  const barX = 120, barY = 840, barW = W - 240, barH = 24;
+  ctx.fillStyle = 'rgba(255,255,255,0.1)';
+  ctx.beginPath();
+  ctx.roundRect(barX, barY, barW, barH, 12);
+  ctx.fill();
+  ctx.fillStyle = c.color;
+  ctx.beginPath();
+  ctx.roundRect(barX, barY, Math.max(barH, barW * pct / 100), barH, 12);
+  ctx.fill();
+
+  // Pie
+  ctx.fillStyle = 'rgba(255,255,255,0.25)';
+  ctx.font = '28px sans-serif';
+  ctx.fillText('Biblioteca Virtual FCAPyF', W/2, 960);
+
+  // Descargar
+  const link = document.createElement('a');
+  link.download = 'mi-progreso-fcapyf.png';
+  link.href = canvas.toDataURL('image/png');
+  link.click();
+}
+
+async function doLogout() {
+  usuarioActual = null;
+  limpiarCache();
+  localStorage.removeItem('biblio_sesion');
+  cerrarModal('modal-perfil');
+  actualizarTopbar();
+  actualizarBannerInicio();
+}
+
+function actualizarTopbar() {
+  const cont = document.getElementById('topbar-content');
+  if (usuarioActual) {
+    // Mostrar año del SIS (primeros 4 dígitos) y ocultar el resto
+    const visible = usuarioActual.substring(0, 4) + '-*****';
+    cont.innerHTML = `<div class="user-chip" onclick="abrirModalPerfil()">
+      <div class="avatar">🎓</div>
+      <span>${visible}</span>
+    </div>`;
+  } else {
+    cont.innerHTML = `<button class="btn-login-top" onclick="abrirModal('modal-auth')">🎓 Mi Progreso</button>`;
+  }
+}
+
+async function abrirModalPerfil() {
+  if (!usuarioActual) return;
+  const data = _cacheData || await getCacheData();
+  document.getElementById('perfil-bienvenida').textContent = 'Tu progreso en la malla curricular 📊';
+
+  // Calcular nivel basado en carrera principal
+  let nivelHtml = '';
+  const carreraFija = data.carrera;
+  if (carreraFija) {
+    const vPrincipal = data.vencidas?.[carreraFija]?.length || 0;
+    const tPrincipal = totalMateriasCarrera(carreraFija);
+    const pctPrincipal = tPrincipal > 0 ? Math.round((vPrincipal / tPrincipal) * 100) : 0;
+    nivelHtml = getNivelHtml(pctPrincipal);
+  }
+
+  let statsHtml = '';
+  let totalVenc = 0;
+  for (const cid in CARRERAS) {
+    const v = data?.vencidas?.[cid]?.length || 0;
+    const t = totalMateriasCarrera(cid);
+    const pct = t > 0 ? Math.round((v/t)*100) : 0;
+    if (v > 0) {
+      const c = CARRERAS[cid];
+      statsHtml += `
+        <div class="perfil-stat">
+          <span class="ps-label">${c.nombre}</span>
+          <span class="ps-val" style="color:${c.color}">${v}/${t} · ${pct}%</span>
+        </div>
+        <div style="padding:0 0 0.6rem;">
+          <div class="sem-progress-bar-bg">
+            <div class="sem-progress-bar-fill" style="width:${pct}%;background:${c.color}"></div>
+          </div>
+        </div>`;
+      totalVenc += v;
+    }
+  }
+  if (!statsHtml) {
+    statsHtml = `<div class="perfil-stat" style="justify-content:center;padding:1rem 0;">
+      <span class="ps-label">Aún no has marcado materias vencidas.</span>
+    </div>`;
+  } else {
+    statsHtml = `<div class="perfil-stat" style="margin-bottom:0.5rem;">
+      <span class="ps-label">Total vencidas</span>
+      <span class="ps-val" style="color:#7bc67e;font-size:1.1rem">${totalVenc} ✅</span>
+    </div>` + statsHtml;
+  }
+  document.getElementById('perfil-stats').innerHTML = nivelHtml + statsHtml;
+  abrirModal('modal-perfil');
+}
+
+async function actualizarBannerInicio() {
+  const wrap = document.getElementById('mi-carrera-banner-wrap');
+  wrap.innerHTML = '';
+  if (!usuarioActual) return;
+  const data = _cacheData || await getCacheData();
+
+  // Mostrar carrera principal elegida por el usuario
+  const carreraFija = data.carrera;
+  let mostrarCarrera = carreraFija;
+  let mejorCount = carreraFija ? (data.vencidas?.[carreraFija]?.length || 0) : 0;
+
+  // Si no tiene carrera fija, mostrar la con más progreso
+  if (!mostrarCarrera) {
+    for (const cid in CARRERAS) {
+      const v = data?.vencidas?.[cid]?.length || 0;
+      if (v > mejorCount) { mejorCount = v; mostrarCarrera = cid; }
+    }
+  }
+
+  if (!mostrarCarrera) {
+    wrap.innerHTML = `<div style="font-size:0.8rem;color:rgba(255,255,255,0.35);text-align:center;margin-bottom:0.8rem;">🔑 Sesión activa · Marca materias como vencidas en cada semestre</div>`;
+    return;
+  }
+  if (!carreraFija && mejorCount === 0) {
+    wrap.innerHTML = `<div style="font-size:0.8rem;color:rgba(255,255,255,0.35);text-align:center;margin-bottom:0.8rem;">🔑 Sesión activa · Marca materias como vencidas en cada semestre</div>`;
+    return;
+  }
+  const total = totalMateriasCarrera(mostrarCarrera);
+  const pct = Math.round((mejorCount / total) * 100);
+  const c = CARRERAS[mostrarCarrera];
+  const etiqueta = carreraFija ? 'Mi carrera' : 'Mi mayor progreso';
+  wrap.innerHTML = `
+    <div class="mi-carrera-banner" onclick="verCarrera('${mostrarCarrera}')">
+      <div style="flex:1">
+        <div class="mc-label">${etiqueta} <span onclick="event.stopPropagation();abrirModal('modal-carrera')" style="color:#7bc67e;cursor:pointer;font-size:0.7rem;margin-left:0.5rem;">✏️ cambiar</span></div>
+        <div class="mc-nombre">${c.nombre}</div>
+        <div style="margin-top:0.5rem;">
+          <div class="sem-progress-bar-bg">
+            <div class="sem-progress-bar-fill" style="width:${pct}%;background:${c.color}"></div>
+          </div>
+          <div class="sem-progress-pct" style="color:${c.color};margin-top:0.3rem">${mejorCount} de ${total} materias vencidas</div>
+        </div>
+      </div>
+      <div class="mc-pct" style="color:${c.color}">${pct}%</div>
+    </div>`;
+}
+
+// ===== NAVEGACIÓN =====
+let semestreActual = null;
+
+function mostrar(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  window.scrollTo(0,0);
+}
+
+function verInicio() {
+  document.getElementById('fondo').style.backgroundImage = "url('fondo.jpg')";
+  actualizarBannerInicio();
+  mostrar('inicio');
+}
+
+function verCarrera(id) {
+  carreraActual = id;
+  const c = CARRERAS[id];
+  document.getElementById('fondo').style.backgroundImage = `url('${c.fondo}')`;
+  document.getElementById('carrera-titulo').textContent = c.nombre;
+  document.getElementById('carrera-titulo').style.color = c.color;
+
+  const cols = c.semestres <= 5 ? c.semestres : 5;
+  const grid = document.getElementById('semestres-grid');
+  grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+
+  // Obtener progreso del usuario
+  let vencidas = [];
+  if (usuarioActual) vencidas = getProgreso(id);
+
+  grid.innerHTML = '';
+  for(let i = 1; i <= c.semestres; i++) {
+    const label = ['1er','2do','3er','4to','5to','6to','7mo','8vo','9no','10mo'][i-1];
+    const mats = c.materias[i] || [];
+    const venc = mats.filter(m => vencidas.includes(m.n)).length;
+    const total = mats.length;
+    const pct = total > 0 ? Math.round((venc / total) * 100) : 0;
+
+    const card = document.createElement('div');
+    card.className = 'sem-card';
+    card.style.borderColor = c.color + '33';
+
+    let progressHtml = '';
+    if (usuarioActual && total > 0) {
+      progressHtml = `
+        <div class="sem-progress-wrap">
+          <div class="sem-progress-bar-bg">
+            <div class="sem-progress-bar-fill" style="width:${pct}%;background:${c.color}"></div>
+          </div>
+          <div class="sem-progress-pct">${venc}/${total} vencidas</div>
+        </div>`;
+    }
+
+    card.innerHTML = `<div class="sem-num" style="color:${c.color}">${i}</div><div class="sem-label">${label} Sem.</div>${progressHtml}`;
+    card.onmouseover = () => { card.style.boxShadow = `0 8px 32px ${c.color}33`; card.style.borderColor = c.color + '88'; };
+    card.onmouseout = () => { card.style.boxShadow = ''; card.style.borderColor = c.color + '33'; };
+    card.onclick = () => verSemestre(id, i);
+    grid.appendChild(card);
+  }
+  mostrar('carrera');
+}
+
+function verCarreraActual() { verCarrera(carreraActual); }
+
+async function verSemestre(carreraId, num) {
+  carreraActual = carreraId;
+  semestreActual = num;
+  await valCargar();
+  const c = CARRERAS[carreraId];
+  const labels = ['1er','2do','3er','4to','5to','6to','7mo','8vo','9no','10mo'];
+  document.getElementById('sem-titulo').textContent = `${labels[num-1]} Semestre`;
+  document.getElementById('sem-carrera-nombre').textContent = c.nombre;
+
+  // Obtener materias vencidas
+  const vencidas = usuarioActual ? getProgreso(carreraId) : [];
+
+  const lista = document.getElementById('materias-lista');
+  lista.innerHTML = '';
+  const mats = c.materias[num] || [];
+
+  // Badge de progreso del semestre
+  const vencCount = mats.filter(m => vencidas.includes(m.n)).length;
+  const pct = mats.length > 0 ? Math.round((vencCount / mats.length) * 100) : 0;
+  if (usuarioActual) {
+    const badge = document.createElement('div');
+    badge.style.cssText = 'width:100%;background:rgba(20,20,20,0.6);border-radius:12px;padding:0.8rem 1.2rem;margin-bottom:0.8rem;border:1px solid rgba(255,255,255,0.07);';
+    badge.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.4rem;">
+        <span style="font-size:0.78rem;color:rgba(255,255,255,0.45)">Progreso del semestre</span>
+        <span style="font-family:'Oswald',sans-serif;font-size:1rem;color:${c.color};font-weight:700">${vencCount}/${mats.length} — ${pct}%</span>
+      </div>
+      <div class="sem-progress-bar-bg">
+        <div class="sem-progress-bar-fill" style="width:${pct}%;background:${c.color}"></div>
+      </div>`;
+    lista.appendChild(badge);
+  }
+
+  mats.forEach(m => {
+    const esVencida = vencidas.includes(m.n);
+    const div = document.createElement('div');
+    div.className = 'materia-item' + (esVencida ? ' mat-vencida' : '');
+    const nombreNorm = m.nombre.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9 ]/g,'').trim();
+    const dlComp = compartidas[nombreNorm] || null;
+    const dl = dlComp || ((driveLinks[carreraId] && driveLinks[carreraId][m.n]) ? driveLinks[carreraId][m.n] : null);
+
+    let btns = '';
+    if (m.a && dl?.a) btns += `<button type="button" class="btn-mat btn-apunte btn-docs-toggle" data-tipo="a" data-folder="${encodeURIComponent(dl.a)}">📄 Apunte</button>`;
+    else if (m.a) btns += `<span class="btn-mat btn-apunte" style="opacity:0.35">📄 Apunte</span>`;
+    if (m.p && dl?.p) btns += `<button type="button" class="btn-mat btn-practica btn-docs-toggle" data-tipo="p" data-folder="${encodeURIComponent(dl.p)}">🧪 Práctica</button>`;
+    else if (m.p) btns += `<span class="btn-mat btn-practica" style="opacity:0.35">🧪 Práctica</span>`;
+    if (m.e && dl?.e) btns += `<button type="button" class="btn-mat btn-examen btn-docs-toggle" data-tipo="e" data-folder="${encodeURIComponent(dl.e)}">📝 Examen</button>`;
+    else if (m.e) btns += `<span class="btn-mat btn-examen" style="opacity:0.35">📝 Examen</span>`;
+
+    let btnVencer = '';
+    if (usuarioActual) {
+      btnVencer = `<button class="btn-vencer ${esVencida ? 'vencida' : ''}" onclick="toggleVencida('${carreraId}', ${m.n})">
+        ${esVencida ? '✅ Vencida' : '○ Marcar'}
+      </button>`;
+    }
+
+    const difWidget = valDifWidgetHtml(carreraId, m.n);
+
+    div.innerHTML = `
+      <div class="mat-row" data-c="${carreraId}" data-m="${m.n}">
+        <div class="mat-num-badge" style="background:${c.color};color:#000">${m.n}</div>
+        <div class="mat-nombre">${esVencida ? '<span class="check-vencida">✅</span>' : ''}${m.nombre}</div>
+        ${difWidget}
+        <div class="mat-btns">${btns || '<span class="pronto">Próximamente...</span>'}${btnVencer}</div>
+      </div>
+      <div class="doc-drawer" data-c="${carreraId}" data-m="${m.n}"></div>`;
+    lista.appendChild(div);
+  });
+  mostrar('semestre');
+}
+
+// ===== INIT =====
+(async function() {
+  const pinGuardado = localStorage.getItem('biblio_sesion');
+  if (pinGuardado && pinGuardado.length === 9) {
+    usuarioActual = pinGuardado;
+    await getCacheData();
+  }
+  actualizarTopbar();
+  actualizarBannerInicio();
+  initDashboard();
+  initValoraciones();
+})();
+
+// ===== VALORACIONES — dificultad por materia + estrellas por archivo en Drive =====
+const VAL_DOC = FB_BASE + '_valoraciones';
+const VAL_COLLECTION = FB_BASE.replace(/\/$/, '');
+const VAL_POLL_MS = 15000;
+const DRIVE_API_KEY = FB_API_KEY;
+const VAL_DOC_LABELS = { a: '📄 Apunte', p: '🧪 Práctica', e: '📝 Examen' };
+let _valGlobal = null;
+const _driveCache = {};
+
+function valEsc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+}
+
+// Para materias compartidas, la clave de dificultad es el nombre normalizado.
+// Así los votos de todas las carreras se suman en el mismo contador global.
+function valDifNombreKey(carreraId, matNum) {
+  // Buscar el nombre de la materia
+  const c = CARRERAS[carreraId];
+  if (!c) return `${carreraId}_${matNum}`;
+  for (const sem in c.materias) {
+    const m = c.materias[sem].find(x => x.n === matNum);
+    if (m) {
+      const nombreNorm = m.nombre.toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+        .replace(/[^a-z0-9]/g,'_').replace(/_+/g,'_').replace(/^_|_$/g,'').slice(0,40);
+      // Verificar si es compartida
+      const nombreNormComp = m.nombre.toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+        .replace(/[^a-z0-9 ]/g,'').trim();
+      if (compartidas && compartidas[nombreNormComp]) return `comp_${nombreNorm}`;
+      return `${carreraId}_${matNum}`;
+    }
+  }
+  return `${carreraId}_${matNum}`;
+}
+function valDifUserKey(carreraId, matNum) { return `${valDifNombreKey(carreraId, matNum)}_dif`; }
+function valFileUserKey(fileId) { return `doc_${fileId}`; }
+function valDifFbKey(carreraId, matNum, nivel) { return `r_${valDifNombreKey(carreraId, matNum)}_d${nivel}`; }
+function valFileFbKey(fileId, suf) { return `fd_${fileId}_${suf}`; }
+
+function valGetField(key) { return (_valGlobal && _valGlobal[key]) ? _valGlobal[key] : 0; }
+
+function valDifPct(carreraId, matNum) {
+  const f = valGetField(valDifFbKey(carreraId, matNum, 'f'));
+  const m = valGetField(valDifFbKey(carreraId, matNum, 'm'));
+  const d = valGetField(valDifFbKey(carreraId, matNum, 'd'));
+  const t = f + m + d;
+  if (!t) return null;
+  return {
+    f, m, d, t,
+    pf: Math.round((f / t) * 100),
+    pm: Math.round((m / t) * 100),
+    pd: Math.round((d / t) * 100)
+  };
+}
+
+function valFilePromedio(fileId) {
+  const n = valGetField(valFileFbKey(fileId, 'n'));
+  return n ? valGetField(valFileFbKey(fileId, 's')) / n : 0;
+}
+
+function valFileVotos(fileId) { return valGetField(valFileFbKey(fileId, 'n')); }
+
+async function valCargar(force) {
+  if (_valGlobal && !force) return _valGlobal;
+  try {
+    const r = await fetch(VAL_DOC + '?key=' + FB_API_KEY);
+    if (r.status === 404) { _valGlobal = {}; return _valGlobal; }
+    if (!r.ok) { console.warn('valCargar HTTP', r.status); return _valGlobal || {}; }
+    const j = await r.json();
+    const out = {};
+    if (j.fields) {
+      for (const k in j.fields) {
+        if (j.fields[k].integerValue !== undefined) out[k] = parseInt(j.fields[k].integerValue, 10);
+      }
+    }
+    _valGlobal = out;
+    return _valGlobal;
+  } catch (e) {
+    console.warn('valCargar:', e);
+    return _valGlobal || {};
+  }
+}
+
+async function valPatch(campos) {
+  const fields = {};
+  for (const k in campos) fields[k] = { integerValue: String(Math.round(campos[k])) };
+  const mask = Object.keys(campos).map(k => `updateMask.fieldPaths=${encodeURIComponent(k)}`).join('&');
+  try {
+    let r = await fetch(`${VAL_DOC}?key=${FB_API_KEY}&${mask}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields })
+    });
+    if (r.status === 404) {
+      r = await fetch(`${VAL_COLLECTION}?documentId=_valoraciones&key=${FB_API_KEY}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields })
+      });
+    }
+    if (!r.ok) console.warn('valPatch HTTP', r.status);
+    for (const k in campos) _valGlobal[k] = campos[k];
+  } catch (e) { console.warn('valPatch:', e); }
+}
+
+function valDifPctsHtml(carreraId, matNum) {
+  const p = valDifPct(carreraId, matNum);
+  if (!p) return '<div class="mat-dif-sin-votos">Sin votos aún</div>';
+  return `<div class="mat-dif-pcts">
+    <span>Fácil <b>${p.pf}%</b> <span style="opacity:0.65">(${p.f})</span></span>
+    <span>Medio <b>${p.pm}%</b> <span style="opacity:0.65">(${p.m})</span></span>
+    <span>Difícil <b>${p.pd}%</b> <span style="opacity:0.65">(${p.d})</span></span>
+  </div>`;
+}
+
+function valDifWidgetHtml(carreraId, matNum) {
+  const uv = (_cacheData && _cacheData.valoraciones) || {};
+  const miVoto = uv[valDifUserKey(carreraId, matNum)] || '';
+  const esVencida = usuarioActual && (_cacheData?.vencidas?.[carreraId] || []).includes(matNum);
+  let voteHtml = '';
+  if (esVencida) {
+    voteHtml = `<div class="mat-dif-vote" data-c="${carreraId}" data-m="${matNum}">
+      <button type="button" class="mat-dif-btn${miVoto === 'f' ? ' on' : ''}" data-l="f">Fácil</button>
+      <button type="button" class="mat-dif-btn${miVoto === 'm' ? ' on' : ''}" data-l="m">Medio</button>
+      <button type="button" class="mat-dif-btn${miVoto === 'd' ? ' on' : ''}" data-l="d">Difícil</button>
+    </div>`;
+  } else if (usuarioActual) {
+    voteHtml = `<div style="font-size:0.56rem;color:rgba(255,255,255,0.2);font-style:italic;margin-top:0.2rem;text-align:right">Vence para votar</div>`;
+  }
+  return `<div class="mat-dif-wrap" data-c="${carreraId}" data-m="${matNum}">
+    ${valDifPctsHtml(carreraId, matNum)}${voteHtml}
+  </div>`;
+}
+
+function valRefreshDifWidgets() {
+  document.querySelectorAll('.mat-dif-wrap').forEach(w => {
+    const c = w.dataset.c, m = parseInt(w.dataset.m, 10);
+    // Reconstruir el widget completo (porcentajes + botones según si está vencida)
+    const tmp = document.createElement('div');
+    tmp.innerHTML = valDifWidgetHtml(c, m);
+    const nuevo = tmp.firstElementChild;
+    w.replaceWith(nuevo);
+  });
+}
+
+function driveFolderId(url) {
+  const m = (url || '').match(/\/folders\/([a-zA-Z0-9_-]+)/);
+  return m ? m[1] : null;
+}
+
+function driveFileUrl(fileId) {
+  return `https://drive.google.com/file/d/${fileId}/view`;
+}
+
+async function driveListFolder(folderUrl) {
+  const id = driveFolderId(folderUrl);
+  if (!id) return { files: [], error: 'Carpeta no válida' };
+  if (_driveCache[id] && Date.now() - _driveCache[id].t < 300000) {
+    return { files: _driveCache[id].files, error: null };
+  }
+  try {
+    const q = encodeURIComponent(`'${id}' in parents and trashed = false`);
+    const url = `https://www.googleapis.com/drive/v3/files?key=${DRIVE_API_KEY}&q=${q}&fields=files(id,name,mimeType)&pageSize=200&orderBy=name`;
+    const r = await fetch(url);
+    const j = await r.json();
+    if (!r.ok) {
+      const msg = j.error?.message || `HTTP ${r.status}`;
+      return { files: [], error: msg };
+    }
+    const files = (j.files || []).filter(f => f.mimeType !== 'application/vnd.google-apps.folder');
+    _driveCache[id] = { t: Date.now(), files };
+    return { files, error: null };
+  } catch (e) {
+    return { files: [], error: String(e) };
+  }
+}
+
+function valFileStarsHtml(fileId, userStars) {
+  // Sistema de estrellas por archivo desactivado (requiere plan de pago)
+  return '';
+}
+
+async function docRenderDrawer(drawer, folderUrl, tipo) {
+  const label = VAL_DOC_LABELS[tipo] || 'Material';
+  // Skeleton de carga fluido
+  drawer.innerHTML = `
+    <div class="doc-drawer-hd">
+      <span>${label}</span>
+      <a href="${valEsc(folderUrl)}" target="_blank" rel="noopener">Abrir carpeta ↗</a>
+    </div>
+    <div class="doc-skel" style="width:80%"></div>
+    <div class="doc-skel" style="width:65%"></div>
+    <div class="doc-skel" style="width:72%"></div>`;
+
+  const { files, error } = await driveListFolder(folderUrl);
+
+  if (error) {
+    const fid = driveFolderId(folderUrl);
+    const iframe = fid
+      ? `<iframe src="https://drive.google.com/embeddedfolderview?id=${fid}#list"
+           style="width:100%;height:300px;border:0;border-radius:8px;margin-top:0.5rem;background:rgba(255,255,255,0.03)"
+           title="Carpeta Drive"></iframe>`
+      : '';
+    drawer.innerHTML = `
+      <div class="doc-drawer-hd">
+        <span>${label}</span>
+        <a href="${valEsc(folderUrl)}" target="_blank" rel="noopener">Abrir en Drive ↗</a>
+      </div>
+      <div class="doc-err" style="margin-bottom:0.3rem">Vista previa incrustada de la carpeta:</div>
+      ${iframe}`;
+    return;
+  }
+
+  if (!files.length) {
+    drawer.innerHTML = `
+      <div class="doc-drawer-hd">
+        <span>${label}</span>
+        <a href="${valEsc(folderUrl)}" target="_blank" rel="noopener">Abrir carpeta ↗</a>
+      </div>
+      <div class="doc-empty">No hay archivos en esta carpeta todavía.</div>`;
+    return;
+  }
+
+  // Ordenar alfabéticamente (sin estrellas)
+  const sorted = files.slice().sort((a, b) => a.name.localeCompare(b.name, 'es'));
+  let rows = '';
+  sorted.forEach(f => {
+    rows += `<div class="doc-file-row">
+      <a class="doc-file-link" href="${driveFileUrl(f.id)}" target="_blank" rel="noopener" title="${valEsc(f.name)}">${valEsc(f.name)}</a>
+    </div>`;
+  });
+  drawer.innerHTML = `
+    <div class="doc-drawer-hd">
+      <span>${label} — ${sorted.length} archivo${sorted.length !== 1 ? 's' : ''}</span>
+      <a href="${valEsc(folderUrl)}" target="_blank" rel="noopener">Abrir carpeta ↗</a>
+    </div>
+    <div class="doc-file-list">${rows}</div>`;
+}
+
+async function docToggleDrawer(btn) {
+  const item = btn.closest('.materia-item');
+  if (!item) return;
+  const drawer = item.querySelector('.doc-drawer');
+  const folderUrl = decodeURIComponent(btn.dataset.folder || '');
+  const tipo = btn.dataset.tipo;
+  const wasOpen = drawer.classList.contains('open') && drawer.dataset.tipo === tipo;
+
+  item.querySelectorAll('.btn-docs-toggle').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.materia-item .doc-drawer').forEach(d => {
+    if (d.closest('.materia-item') !== item) {
+      d.classList.remove('open');
+      setTimeout(() => { if (!d.classList.contains('open')) d.innerHTML = ''; }, 350);
+    }
+  });
+
+  if (wasOpen) {
+    drawer.classList.remove('open');
+    btn.classList.remove('active');
+    setTimeout(() => { if (!drawer.classList.contains('open')) drawer.innerHTML = ''; }, 350);
+    return;
+  }
+
+  drawer.dataset.tipo = tipo;
+  drawer.dataset.folder = folderUrl;
+  drawer.classList.add('open');
+  btn.classList.add('active');
+  await docRenderDrawer(drawer, folderUrl, tipo);
+}
+
+async function valEnviarVotoDif(carreraId, matNum, nivel) {
+  if (!usuarioActual) { abrirModal('modal-auth'); return; }
+  // Solo puede votar si tiene la materia marcada como vencida
+  const vencidas = _cacheData?.vencidas?.[carreraId] || [];
+  if (!vencidas.includes(matNum)) return;
+  const data = await getCacheData();
+  if (!data.valoraciones) data.valoraciones = {};
+  const userKey = valDifUserKey(carreraId, matNum);
+  const oldVal = data.valoraciones[userKey];
+  if (oldVal === nivel) return;
+  await valCargar(true);
+  const updates = {};
+  if (oldVal) updates[valDifFbKey(carreraId, matNum, oldVal)] = Math.max(0, valGetField(valDifFbKey(carreraId, matNum, oldVal)) - 1);
+  updates[valDifFbKey(carreraId, matNum, nivel)] = valGetField(valDifFbKey(carreraId, matNum, nivel)) + 1;
+  data.valoraciones[userKey] = nivel;
+  await valPatch(updates);
+  guardarDatosUsuario(usuarioActual, data);
+  await valCargar(true);
+  valRefreshDifWidgets();
+  itemUpdateDifVoteButtons(carreraId, matNum, nivel);
+}
+
+function itemUpdateDifVoteButtons(carreraId, matNum, nivel) {
+  const wrap = document.querySelector(`.mat-dif-vote[data-c="${carreraId}"][data-m="${matNum}"]`);
+  if (!wrap) return;
+  wrap.querySelectorAll('.mat-dif-btn').forEach(b => {
+    b.classList.toggle('on', b.dataset.l === nivel);
+  });
+}
+
+async function valEnviarVotoArchivo(fileId, stars) {
+  if (!usuarioActual) { abrirModal('modal-auth'); return; }
+  const data = await getCacheData();
+  if (!data.valoraciones) data.valoraciones = {};
+  const userKey = valFileUserKey(fileId);
+  const oldVal = data.valoraciones[userKey] ? parseInt(data.valoraciones[userKey], 10) : 0;
+  const newStars = parseInt(stars, 10);
+  if (oldVal === newStars) return;
+  await valCargar(true);
+  const sKey = valFileFbKey(fileId, 's');
+  const nKey = valFileFbKey(fileId, 'n');
+  let sum = valGetField(sKey);
+  let n = valGetField(nKey);
+  if (oldVal) sum -= oldVal;
+  else n += 1;
+  sum += newStars;
+  await valPatch({ [sKey]: sum, [nKey]: n });
+  data.valoraciones[userKey] = String(newStars);
+  guardarDatosUsuario(usuarioActual, data);
+  await valCargar(true);
+  const drawer = document.querySelector('.doc-drawer.open');
+  if (drawer && drawer.dataset.folder) {
+    await docRenderDrawer(drawer, drawer.dataset.folder, drawer.dataset.tipo);
+  }
+}
+
+function initValoraciones() {
+  valCargar();
+  document.addEventListener('click', e => {
+    const toggle = e.target.closest('.btn-docs-toggle');
+    if (toggle) {
+      e.preventDefault();
+      docToggleDrawer(toggle);
+      return;
+    }
+    const dif = e.target.closest('.mat-dif-btn');
+    if (dif) {
+      e.preventDefault();
+      const wrap = dif.closest('.mat-dif-vote');
+      if (!wrap) return;
+      valEnviarVotoDif(wrap.dataset.c, parseInt(wrap.dataset.m, 10), dif.dataset.l);
+      return;
+    }
+    const fstar = e.target.closest('.val-file-star');
+    if (fstar) {
+      // Sistema de estrellas por archivo desactivado
+      return;
+    }
+  });
+  setInterval(async () => {
+    const sem = document.getElementById('semestre');
+    if (!sem || !sem.classList.contains('active')) return;
+    await valCargar(true);
+    valRefreshDifWidgets();
+  }, VAL_POLL_MS);
+}
+
+// ===== DASHBOARD — Firestore (progreso/_dashboard) =====
+//   activos       : map — id de sesión → último latido (unix seg); cuenta "en línea"
+//   docs_hoy      : integer — documentos abiertos hoy
+//   materia_top / materia_carrera / fecha_hoy / mat_<nombre>
+
+const DASH_DOC = FB_BASE + '_dashboard';
+const DASH_COLLECTION = FB_BASE.replace(/\/$/, '');
+const PRESENCE_ONLINE_SEC = 70;   // activo si latió en los últimos 70 s
+const PRESENCE_BEAT_MS = 20000;   // latido cada 20 s
+const PRESENCE_POLL_MS = 12000;   // refrescar widget cada 12 s
+const PRESENCE_MAP_MAX_AGE = 180; // borrar sesiones del mapa si llevan >3 min sin latir
+
+function hoyISO() {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/La_Paz' }).format(new Date());
+}
+
+function dashSessionId() {
+  let id = sessionStorage.getItem('biblio_presence_id');
+  if (!id) {
+    id = typeof crypto !== 'undefined' && crypto.randomUUID
+      ? 's' + crypto.randomUUID().replace(/-/g, '').slice(0, 20)
+      : 's' + Math.random().toString(36).slice(2, 12) + Date.now().toString(36).slice(-6);
+    sessionStorage.setItem('biblio_presence_id', id);
+  }
+  return id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 28);
+}
+
+function dashParseFields(f) {
+  const out = {};
+  for (const k in f) {
+    const v = f[k];
+    if (v.mapValue) {
+      const mf = v.mapValue.fields || {};
+      const map = {};
+      for (const sk in mf) {
+        if (mf[sk].integerValue !== undefined) map[sk] = parseInt(mf[sk].integerValue, 10);
+      }
+      out[k] = map;
+    } else if (v.integerValue !== undefined) out[k] = parseInt(v.integerValue, 10);
+    else if (v.stringValue !== undefined) out[k] = v.stringValue;
+  }
+  return out;
+}
+
+function dashContarActivos(activos) {
+  if (!activos || typeof activos !== 'object') return 0;
+  const now = Math.floor(Date.now() / 1000);
+  return Object.values(activos).filter(ts => now - ts <= PRESENCE_ONLINE_SEC).length;
+}
+
+function dashToFields(campos) {
+  const fields = {};
+  for (const k in campos) {
+    const v = campos[k];
+    if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
+      const mapFields = {};
+      for (const sk in v) {
+        mapFields[sk] = { integerValue: String(Math.round(v[sk])) };
+      }
+      fields[k] = { mapValue: { fields: mapFields } };
+    } else if (typeof v === 'number') fields[k] = { integerValue: String(Math.round(v)) };
+    else fields[k] = { stringValue: String(v) };
+  }
+  return fields;
+}
+
+// Lee el doc de dashboard desde Firestore
+async function dashLeer() {
+  try {
+    const r = await fetch(DASH_DOC + '?key=' + FB_API_KEY);
+    if (r.status === 404) return { fecha_hoy: null, docs_hoy: 0, activos: {} };
+    if (!r.ok) {
+      console.warn('dashLeer HTTP', r.status);
+      return null;
+    }
+    const j = await r.json();
+    if (!j.fields) return { fecha_hoy: null, docs_hoy: 0, activos: {} };
+    return dashParseFields(j.fields);
+  } catch(e) {
+    console.warn('dashLeer:', e);
+    return null;
+  }
+}
+
+// Escribe campos parciales (PATCH; si no existe el doc, lo crea con POST)
+async function dashPatch(campos) {
+  try {
+    const fields = dashToFields(campos);
+    const mask = Object.keys(campos).map(k => `updateMask.fieldPaths=${encodeURIComponent(k)}`).join('&');
+    let r = await fetch(`${DASH_DOC}?key=${FB_API_KEY}&${mask}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields })
+    });
+    if (r.status === 404) {
+      r = await fetch(`${DASH_COLLECTION}?documentId=_dashboard&key=${FB_API_KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fields })
+      });
+    }
+    if (!r.ok) console.warn('dashPatch HTTP', r.status, await r.text());
+  } catch(e) { console.warn('dashPatch:', e); }
+}
+
+// Renderiza los 3 valores en el widget
+function dashRender(d) {
+  const hoy = hoyISO();
+  if (!d) {
+    ['dw-usuarios','dp-usuarios','dw-docs','dp-docs'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = '—';
+    });
+    return;
+  }
+  const usuarios = dashContarActivos(d.activos);
+  const docs     = d.fecha_hoy === hoy ? (d.docs_hoy ?? 0) : 0;
+  const matNom   = d.materia_top     || '—';
+  const matCar   = d.materia_carrera || '';
+
+  ['dw-usuarios','dp-usuarios'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = usuarios;
+  });
+  ['dw-docs','dp-docs'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = docs;
+  });
+  const elNom = document.getElementById('dp-materia-nombre');
+  const elCar = document.getElementById('dp-materia-sub');
+  if (elNom) elNom.textContent = matNom;
+  if (elCar) elCar.textContent = matCar;
+}
+
+// Latido de presencia: cada pestaña actualiza solo su clave (no pisa a los demás)
+async function dashPresencePulse() {
+  const sid = dashSessionId();
+  const now = Math.floor(Date.now() / 1000);
+  const fieldPath = `activos.${sid}`;
+  const body = {
+    fields: {
+      activos: {
+        mapValue: {
+          fields: { [sid]: { integerValue: String(now) } }
+        }
+      }
+    }
+  };
+  try {
+    let r = await fetch(
+      `${DASH_DOC}?key=${FB_API_KEY}&updateMask.fieldPaths=${encodeURIComponent(fieldPath)}`,
+      { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+    );
+    if (r.status === 404) {
+      await fetch(`${DASH_COLLECTION}?documentId=_dashboard&key=${FB_API_KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+    } else if (!r.ok) {
+      console.warn('dashPresencePulse HTTP', r.status);
+    }
+    // Limpieza cada ~5 latidos para no crecer sin límite
+    if (Math.random() < 0.20) dashPresenceLimpiar();
+  } catch (e) { console.warn('dashPresencePulse:', e); }
+}
+
+async function dashPresenceLimpiar() {
+  const d = await dashLeer();
+  if (!d?.activos) return;
+  const now = Math.floor(Date.now() / 1000);
+  const sid = dashSessionId();
+  // Borrar solo las claves viejas una por una (no sobreescribir el mapa entero)
+  for (const k in d.activos) {
+    if (k === sid) continue; // nunca borrar la propia sesión
+    if (now - d.activos[k] > PRESENCE_MAP_MAX_AGE) {
+      const fieldPath = `activos.${k}`;
+      try {
+        // Firestore REST: borrar un campo usando updateMask + valor nulo no funciona directo,
+        // así que sobreescribimos con timestamp 0 (queda fuera del umbral activo y se limpia en próxima pasada)
+        const body = { fields: { activos: { mapValue: { fields: { [k]: { integerValue: '0' } } } } } };
+        await fetch(
+          `${DASH_DOC}?key=${FB_API_KEY}&updateMask.fieldPaths=${encodeURIComponent(fieldPath)}`,
+          { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+        );
+      } catch(e) { /* silencioso */ }
+    }
+  }
+}
+
+// Al abrir material: incrementa docs_hoy y visitas de esa materia
+// Usa reintentos para evitar race condition entre pestañas
+async function dashRegistrarDoc(nombreMateria, nombreCarrera) {
+  const hoy = hoyISO();
+
+  // Incrementar docs_hoy con reintento (leer → calcular → escribir, hasta 3 intentos)
+  for (let intento = 0; intento < 3; intento++) {
+    let d = await dashLeer();
+    if (!d) d = { fecha_hoy: null, docs_hoy: 0, activos: {} };
+
+    const docsBase = d.fecha_hoy === hoy ? (d.docs_hoy || 0) : 0;
+    const nuevoDocs = docsBase + 1;
+
+    // Clave de la materia
+    const matKey = 'mat_' + nombreMateria.toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+      .replace(/[^a-z0-9]/g,'_').replace(/_+/g,'_').slice(0, 40);
+    const visitas = (d[matKey] || 0) + 1;
+
+    // ¿Es la materia más visitada?
+    const topActualKey = d.materia_top
+      ? 'mat_' + d.materia_top.toLowerCase()
+          .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+          .replace(/[^a-z0-9]/g,'_').replace(/_+/g,'_').slice(0,40)
+      : null;
+    const visitasTop = topActualKey ? (d[topActualKey] || 0) : 0;
+
+    const campos = {
+      docs_hoy: nuevoDocs,
+      fecha_hoy: hoy,
+      [matKey]: visitas,
+    };
+    if (visitas >= visitasTop) {
+      campos.materia_top     = nombreMateria;
+      campos.materia_carrera = nombreCarrera;
+    }
+
+    try {
+      await dashPatch(campos);
+      break; // éxito, salir del loop
+    } catch(e) {
+      if (intento < 2) await new Promise(r => setTimeout(r, 300 + intento * 200));
+    }
+  }
+
+  // Refrescar widget
+  dashRender(await dashLeer());
+}
+
+// Init completo del dashboard
+async function initDashboard() {
+  const refrescar = async () => dashRender(await dashLeer());
+
+  await refrescar();
+  await dashPresencePulse();
+  await refrescar();
+
+  setInterval(dashPresencePulse, PRESENCE_BEAT_MS);
+  setInterval(refrescar, PRESENCE_POLL_MS);
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      dashPresencePulse().then(refrescar);
+    }
+  });
+}
+
+// Contador dashboard: al abrir un archivo desde la lista O al abrir el drawer
+document.addEventListener('click', function(e) {
+  // Click en link directo al archivo
+  const link = e.target.closest('.doc-file-link');
+  if (link) {
+    const item = link.closest('.materia-item');
+    if (!item) return;
+    const nombreEl = item.querySelector('.mat-nombre');
+    const nombre = nombreEl ? nombreEl.textContent.replace('✅', '').trim() : '—';
+    const carreraTit = document.getElementById('carrera-titulo');
+    const carrera = carreraTit ? carreraTit.textContent.trim() : '';
+    dashRegistrarDoc(nombre, carrera);
+    return;
+  }
+  // Click en botón de apertura del drawer
+  const toggle = e.target.closest('.btn-docs-toggle');
+  if (toggle) {
+    const item = toggle.closest('.materia-item');
+    if (!item) return;
+    const drawer = item.querySelector('.doc-drawer');
+    // Solo contar si el drawer estaba cerrado (o diferente tipo) — apertura, no cierre
+    if (!drawer || (drawer.classList.contains('open') && drawer.dataset.tipo === toggle.dataset.tipo)) return;
+    const nombreEl = item.querySelector('.mat-nombre');
+    const nombre = nombreEl ? nombreEl.textContent.replace('✅', '').trim() : '—';
+    const carreraTit = document.getElementById('carrera-titulo');
+    const carrera = carreraTit ? carreraTit.textContent.trim() : '';
+    dashRegistrarDoc(nombre, carrera);
+  }
+});
+
+// Toggle del panel expandido
+function toggleDashPanel(e) {
+  e.stopPropagation();
+  document.getElementById('dash-panel').classList.toggle('open');
+}
+document.addEventListener('click', function(e) {
+  const panel = document.getElementById('dash-panel');
+  if (!panel) return;
+  if (panel.classList.contains('open') && !document.getElementById('dash-widget').contains(e.target)) {
+    panel.classList.remove('open');
+  }
+});
+
+// ===== MAPA =====
+function abrirMapa() {
+  abrirModal('modal-mapa');
+}
+function cerrarMapaSiOverlay(e) {
+  if (e.target === document.getElementById('modal-mapa')) cerrarModal('modal-mapa');
+}
+
+// ===== CALENDARIO =====
+function abrirCalendario() {
+  abrirModal('modal-calendario');
+}
+function cerrarCalendarioSiOverlay(e) {
+  if (e.target === document.getElementById('modal-calendario')) cerrarModal('modal-calendario');
+}
+
+// ===== PWA BANNER =====
+let _pwaPrompt = null;
+let _pwaBannerTimer = null;
+
+// Detecta si ya está corriendo como PWA instalada
+function pwaYaInstalada() {
+  return window.matchMedia('(display-mode: standalone)').matches
+    || window.navigator.standalone === true;
+}
+
+// Detecta iOS (Safari, Chrome en iOS, etc.)
+function esIOS() {
+  return /iphone|ipad|ipod/i.test(navigator.userAgent);
+}
+
+// Detecta Samsung Internet
+function esSamsung() {
+  return /SamsungBrowser/i.test(navigator.userAgent);
+}
+
+function pwaMostrarBanner() {
+  if (pwaYaInstalada()) return; // ya está como app, no mostrar
+  if (sessionStorage.getItem('pwa_banner_visto')) return;
+  sessionStorage.setItem('pwa_banner_visto', '1');
+  const b = document.getElementById('pwa-banner');
+  if (!b) return;
+
+  // Ajustar el subtexto según si tenemos prompt nativo o no
+  const sub = document.getElementById('pwa-banner-sub');
+  if (!_pwaPrompt && sub) {
+    if (esIOS()) {
+      sub.textContent = 'En Safari: menú Compartir → "En pantalla de inicio"';
+    } else {
+      sub.textContent = 'Menú del navegador → "Añadir a pantalla de inicio"';
+    }
+  }
+
+  b.style.display = 'flex';
+  b.style.opacity = '1';
+  _pwaBannerTimer = setTimeout(() => pwaCerrarBanner(), 12000);
+}
+
+function pwaCerrarBanner() {
+  clearTimeout(_pwaBannerTimer);
+  const b = document.getElementById('pwa-banner');
+  if (!b) return;
+  b.style.opacity = '0';
+  setTimeout(() => { b.style.display = 'none'; }, 500);
+}
+
+function pwaInstalar() {
+  if (_pwaPrompt) {
+    // Chrome/Edge Android: usar el prompt nativo del navegador
+    _pwaPrompt.prompt();
+    _pwaPrompt.userChoice.then(() => { _pwaPrompt = null; });
+    pwaCerrarBanner();
+  } else {
+    // Sin prompt nativo: mostrar instrucciones manuales
+    pwaCerrarBanner();
+    const modal = document.getElementById('pwa-modal-manual');
+    const steps = document.getElementById('pwa-manual-steps');
+    if (!modal || !steps) return;
+
+    if (esIOS()) {
+      steps.innerHTML =
+        '1️⃣ Abrí esta página en <strong style="color:#fff">Safari</strong>.<br>' +
+        '2️⃣ Tocá el botón <strong style="color:#fff">Compartir</strong> (cuadrado con flecha ↑) en la barra inferior.<br>' +
+        '3️⃣ Desplazate y elegí <strong style="color:#7bc67e">"En pantalla de inicio"</strong>.<br>' +
+        '4️⃣ Confirmá tocando <strong style="color:#7bc67e">Agregar</strong>.';
+    } else if (esSamsung()) {
+      steps.innerHTML =
+        '1️⃣ Tocá el menú <strong style="color:#fff">⋮</strong> (arriba a la derecha).<br>' +
+        '2️⃣ Elegí <strong style="color:#7bc67e">"Agregar página a"</strong>.<br>' +
+        '3️⃣ Seleccioná <strong style="color:#7bc67e">"Pantalla de inicio"</strong>.';
+    } else {
+      steps.innerHTML =
+        '1️⃣ Tocá el menú <strong style="color:#fff">⋮</strong> (arriba a la derecha).<br>' +
+        '2️⃣ Elegí <strong style="color:#7bc67e">"Añadir a pantalla de inicio"</strong> o <strong style="color:#7bc67e">"Instalar app"</strong>.<br>' +
+        '3️⃣ Confirmá tocando <strong style="color:#7bc67e">Agregar</strong>.';
+    }
+
+    modal.style.display = 'flex';
+  }
+}
+
+window.addEventListener('beforeinstallprompt', e => {
+  e.preventDefault();
+  _pwaPrompt = e;
+  // Si el banner ya se estaba mostrando sin prompt, actualizar el subtexto
+  const sub = document.getElementById('pwa-banner-sub');
+  if (sub) sub.textContent = 'Acceso directo desde tu celular, igual que una app';
+  const btn = document.getElementById('pwa-btn-instalar');
+  if (btn) btn.textContent = 'Instalar';
+});
+
+window.addEventListener('appinstalled', pwaCerrarBanner);
+
+// Mostrar el banner siempre (con o sin prompt nativo), después de la animación de entrada
+window.addEventListener('load', () => {
+  setTimeout(pwaMostrarBanner, 2000);
+});
+</script>
+</body>
+</html>
